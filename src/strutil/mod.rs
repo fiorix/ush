@@ -3,18 +3,18 @@ use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct StringSet {
+pub struct StringSet {
     inner: std::collections::HashSet<String>,
 }
 
 impl StringSet {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: std::collections::HashSet::new(),
         }
     }
 
-    pub(crate) fn from_file(path: &Path) -> io::Result<Self> {
+    pub fn from_file(path: &Path) -> io::Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut s = Self::new();
@@ -28,19 +28,19 @@ impl StringSet {
         Ok(s)
     }
 
-    pub(crate) fn add(&mut self, v: &str) {
+    pub fn add(&mut self, v: &str) {
         self.inner.insert(v.to_string());
     }
 
-    pub(crate) fn remove(&mut self, v: &str) {
+    pub fn remove(&mut self, v: &str) {
         self.inner.remove(v);
     }
 
-    pub(crate) fn contains(&self, v: &str) -> bool {
+    pub fn contains(&self, v: &str) -> bool {
         self.inner.contains(v)
     }
 
-    pub(crate) fn sorted_strings(&self) -> Vec<String> {
+    pub fn sorted_strings(&self) -> Vec<String> {
         let mut v: Vec<String> = self.inner.iter().cloned().collect();
         v.sort();
         v

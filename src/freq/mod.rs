@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
-use crate::json::{self, JsonValue};
+use crate::exec::ExecResult;
 use crate::time::{format_duration, parse_duration};
 
 #[derive(Debug, Clone)]
-pub(crate) struct Item {
-    pub(crate) freq: f64,
-    pub(crate) value: String,
-    pub(crate) targets: Vec<String>,
+pub struct Item {
+    pub freq: f64,
+    pub value: String,
+    pub targets: Vec<String>,
 }
 
 fn to_fixed(num: f64, precision: u32) -> f64 {
@@ -17,9 +17,9 @@ fn to_fixed(num: f64, precision: u32) -> f64 {
     (num * factor + 0.5).floor() / factor
 }
 
-fn read_results<F: Fn(&HashMap<String, JsonValue>) -> String>(
+fn read_results(
     reader: impl io::Read,
-    key_reader: F,
+    key_fn: impl Fn(&ExecResult) -> String,
     sorter: fn(&mut Vec<Item>),
 ) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     let buf = io::BufReader::new(reader);
@@ -32,25 +32,14 @@ fn read_results<F: Fn(&HashMap<String, JsonValue>) -> String>(
             continue;
         }
 
-        let (obj, _) = match json::parse_json_value(&line) {
-            Some(v) => v,
-            None => continue,
-        };
-
-        let fields = match json::parse_exec_result(&obj) {
-            Some(f) => f,
-            None => continue,
+        let result: ExecResult = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(_) => continue,
         };
 
         total += 1;
-        let key = key_reader(&fields);
-        let target = fields
-            .get("target")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        m.entry(key).or_default().push(target);
+        let key = key_fn(&result);
+        m.entry(key).or_default().push(result.target);
     }
 
     if m.is_empty() {
@@ -71,18 +60,14 @@ fn read_results<F: Fn(&HashMap<String, JsonValue>) -> String>(
     Ok(items)
 }
 
-pub(crate) fn duration(
+pub fn duration(
     reader: impl io::Read,
     truncate: Duration,
 ) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     read_results(
         reader,
-        |fields| {
-            let dur_str = fields
-                .get("duration")
-                .and_then(|v| v.as_str())
-                .unwrap_or("0s");
-            let d = parse_duration(dur_str).unwrap_or_default();
+        |result| {
+            let d = parse_duration(&result.duration).unwrap_or_default();
             let truncate_nanos = truncate.as_nanos();
             if truncate_nanos == 0 {
                 return format_duration(d);
@@ -101,16 +86,10 @@ pub(crate) fn duration(
     )
 }
 
-pub(crate) fn exit_status(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
+pub fn exit_status(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     read_results(
         reader,
-        |fields| {
-            let status = fields
-                .get("exit_status")
-                .and_then(|v| v.as_i32())
-                .unwrap_or(0);
-            status.to_string()
-        },
+        |result| result.exit_status.to_string(),
         |items| {
             items.sort_by(|a, b| {
                 let va: i32 = a.value.parse().unwrap_or(0);
@@ -121,47 +100,35 @@ pub(crate) fn exit_status(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn st
     )
 }
 
-pub(crate) fn stdout(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
+pub fn stdout(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     read_results(
         reader,
-        |fields| {
-            fields
-                .get("stdout")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        },
+        |result| result.stdout.clone(),
         |items| items.sort_by(|a, b| a.targets.len().cmp(&b.targets.len())),
     )
 }
 
-pub(crate) fn stderr(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
+pub fn stderr(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     read_results(
         reader,
-        |fields| {
-            fields
-                .get("stderr")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        },
+        |result| result.stderr.clone(),
         |items| items.sort_by(|a, b| a.targets.len().cmp(&b.targets.len())),
     )
 }
 
-pub(crate) fn encode_json(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
+pub fn encode_json(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
     for item in items {
         write!(
             w,
             "{{\"freq\":{},\"value\":{},\"targets\":[",
             format_freq(item.freq),
-            json::escape_json_string(&item.value),
+            serde_json::to_string(&item.value).unwrap_or_default(),
         )?;
         for (i, t) in item.targets.iter().enumerate() {
             if i > 0 {
                 write!(w, ",")?;
             }
-            write!(w, "{}", json::escape_json_string(t))?;
+            write!(w, "{}", serde_json::to_string(t).unwrap_or_default())?;
         }
         writeln!(w, "]}}")?;
     }
@@ -171,14 +138,13 @@ pub(crate) fn encode_json(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
 /// Format frequency: integers as "100", floats as "33.33".
 fn format_freq(f: f64) -> String {
     if f == f.trunc() {
-        // Integer value — Go encodes 100.0 as 100 in JSON
         format!("{}", f as i64)
     } else {
         format!("{}", f)
     }
 }
 
-pub(crate) fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
+pub fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
     writeln!(w, "{:<8} {:<8} {:<8} value", "count", "targets", "freq %")?;
     for (i, item) in items.iter().enumerate() {
         let mut v = item.value.clone();
@@ -238,14 +204,17 @@ mod tests {
         stdout: &str,
         stderr: &str,
     ) -> String {
-        format!(
-            "{{\"target\":{},\"duration\":{},\"start_time\":\"2024-01-01T00:00:00Z\",\"end_time\":\"2024-01-01T00:00:00Z\",\"exit_status\":{},\"stdout\":{},\"stderr\":{},\"error\":\"\"}}",
-            json::escape_json_string(target),
-            json::escape_json_string(duration),
+        serde_json::to_string(&ExecResult {
+            target: target.to_string(),
+            duration: duration.to_string(),
+            start_time: "2024-01-01T00:00:00Z".to_string(),
+            end_time: "2024-01-01T00:00:00Z".to_string(),
             exit_status,
-            json::escape_json_string(stdout),
-            json::escape_json_string(stderr),
-        )
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            error: String::new(),
+        })
+        .unwrap()
     }
 
     #[test]

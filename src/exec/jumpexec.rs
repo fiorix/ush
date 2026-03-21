@@ -1,22 +1,24 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use super::{is_shutdown, Spec};
+use crossbeam_channel as channel;
 
-pub(crate) const DEFAULT_JUMP_COMMAND: &str =
-    "ssh -A -oBatchMode=yes -oConnectTimeout=10 -- {jump}";
+use super::{ExecResult, Spec};
 
-pub(crate) struct JumpSpec {
-    pub(crate) spec: Spec,
-    pub(crate) jump_hosts_key_file: String,
-    pub(crate) jump_command: String,
-    pub(crate) jump_hosts: Vec<String>,
+pub const DEFAULT_JUMP_COMMAND: &str = "ssh -A -oBatchMode=yes -oConnectTimeout=10 -- {jump}";
+
+pub struct JumpSpec {
+    pub spec: Spec,
+    pub jump_hosts_key_file: String,
+    pub jump_command: String,
+    pub jump_hosts: Vec<String>,
 }
 
 impl JumpSpec {
-    pub(crate) fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.spec.validate()?;
         if self.jump_command.is_empty() {
             return Err("jump command not set".into());
@@ -24,7 +26,6 @@ impl JumpSpec {
         if self.jump_hosts.is_empty() {
             return Err("no jump hosts available".into());
         }
-        // Validate jump host names: reject whitespace and option-like strings
         for host in &self.jump_hosts {
             if host.contains(char::is_whitespace) {
                 return Err(format!("jump host name contains whitespace: {:?}", host).into());
@@ -38,15 +39,15 @@ impl JumpSpec {
 }
 
 /// Executes commands via jump hosts with ssh-agent per host.
-pub(crate) fn jump_exec(
-    w: Arc<Mutex<Box<dyn Write + Send>>>,
+pub fn jump_exec(
     spec: &JumpSpec,
-    input: mpsc::Receiver<String>,
+    targets: channel::Receiver<String>,
+    results: channel::Sender<ExecResult>,
+    shutdown: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     spec.validate()?;
 
     let parallel = std::cmp::max(1, spec.spec.parallel / spec.jump_hosts.len());
-    let input = Arc::new(Mutex::new(input));
     let mut handles = Vec::new();
 
     vlog!(
@@ -68,8 +69,6 @@ pub(crate) fn jump_exec(
             vlog!("[verbose] jump_exec: key loaded for {}", host);
         }
 
-        // Build SSH command: split the template, substitute {jump} into individual args
-        // This prevents argument injection via host names containing spaces or -o flags
         let template_parts: Vec<&str> = spec.jump_command.split_whitespace().collect();
         if template_parts.is_empty() {
             return Err("empty jump command".into());
@@ -81,7 +80,6 @@ pub(crate) fn jump_exec(
             .map(|s| s.replace("{jump}", host))
             .collect();
 
-        // Append the remote ush command after the SSH args
         args.push("ush".to_string());
         args.push("exec".to_string());
         args.push(format!(
@@ -118,35 +116,32 @@ pub(crate) fn jump_exec(
         let child_stdout = child.stdout.take().unwrap();
         let child_stderr = child.stderr.take().unwrap();
 
-        let input = input.clone();
-        let w = w.clone();
+        let targets = targets.clone();
+        let results = results.clone();
+        let shutdown = shutdown.clone();
         let host_name = host.clone();
 
         // Feed targets to stdin
         let feed_handle = std::thread::spawn(move || {
             let mut stdin = child_stdin;
             loop {
-                if is_shutdown() {
+                if shutdown.load(Ordering::Relaxed) {
                     break;
                 }
-                let target = {
-                    let rx = input.lock().unwrap();
-                    rx.recv().ok()
-                };
-                match target {
-                    Some(t) => {
+                match targets.recv() {
+                    Ok(t) => {
                         if writeln!(stdin, "{}", t).is_err() {
                             break;
                         }
                     }
-                    None => break,
+                    Err(_) => break,
                 }
             }
             drop(stdin);
         });
 
-        // Read stdout (JSON lines) and write synchronized
-        let w2 = w.clone();
+        // Read stdout (JSON lines), parse into ExecResult, forward to results channel
+        let results2 = results.clone();
         let stdout_handle = std::thread::spawn(move || {
             let reader = BufReader::new(child_stdout);
             for line in reader.lines() {
@@ -155,8 +150,16 @@ pub(crate) fn jump_exec(
                         if line.is_empty() {
                             continue;
                         }
-                        let mut w = w2.lock().unwrap();
-                        let _ = writeln!(&mut *w, "{}", line);
+                        match serde_json::from_str::<ExecResult>(&line) {
+                            Ok(result) => {
+                                if results2.send(result).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                vlog!("[verbose] jump_exec: failed to parse result: {}", e);
+                            }
+                        }
                     }
                     Err(_) => break,
                 }
@@ -191,6 +194,9 @@ pub(crate) fn jump_exec(
         }));
     }
 
+    // Drop our copy so the results channel closes when all hosts finish
+    drop(results);
+
     for handle in handles {
         let _ = handle.join();
     }
@@ -210,7 +216,6 @@ fn ssh_agent(jumphost: &str) -> Result<(Child, String), Box<dyn std::error::Erro
     let mut first_line = String::new();
     reader.read_line(&mut first_line)?;
 
-    // Parse SSH_AUTH_SOCK=value; export SSH_AUTH_SOCK;
     let parts: Vec<&str> = first_line.splitn(2, '=').collect();
     if parts.len() != 2 {
         let _ = cmd.kill();
@@ -227,7 +232,6 @@ fn ssh_agent(jumphost: &str) -> Result<(Child, String), Box<dyn std::error::Erro
         return Err(format!("{}: empty SSH_AUTH_SOCK from ssh-agent", jumphost).into());
     }
 
-    // Retry socket existence check with short timeout
     let mut found = false;
     for attempt in 0..20 {
         if std::path::Path::new(&sock).exists() {

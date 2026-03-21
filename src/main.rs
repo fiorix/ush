@@ -1,12 +1,4 @@
-#[macro_use]
-mod verbose;
-
 mod cmd;
-mod exec;
-mod freq;
-mod json;
-mod strutil;
-mod time;
 
 use std::env;
 use std::process;
@@ -77,12 +69,11 @@ fn main() {
         process::exit(1);
     }
 
-    // Parse global flags before subcommand
     let mut sub_start = 0;
     for (i, arg) in args.iter().enumerate() {
         match arg.as_str() {
             "--verbose" | "-v" => {
-                verbose::set_verbose(true);
+                ush::verbose::set_verbose(true);
             }
             "--help" | "-h" | "help" => {
                 println!("{}", USAGE);

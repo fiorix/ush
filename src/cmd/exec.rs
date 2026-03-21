@@ -1,12 +1,12 @@
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::exec::jumpexec::{self, JumpSpec, DEFAULT_JUMP_COMMAND};
-use crate::exec::{self as exec_mod, Spec};
-use crate::strutil::StringSet;
-use crate::time::parse_duration;
+use ush::strutil::StringSet;
+use ush::time::parse_duration;
+use ush::{exec, jump_exec, read_targets, ExecResult, JumpSpec, Spec, DEFAULT_JUMP_COMMAND};
 
 pub(crate) struct ExecArgs {
     pub(crate) timeout: Duration,
@@ -45,7 +45,6 @@ pub(crate) fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
     while i < args.len() {
         let arg = &args[i];
 
-        // Check for -- separator
         if arg == "--" {
             result.command = args[i + 1..].to_vec();
             break;
@@ -77,7 +76,6 @@ pub(crate) fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
         } else if arg == "--head" {
             result.head = true;
         } else {
-            // First non-flag argument starts the command
             result.command = args[i..].to_vec();
             break;
         }
@@ -92,7 +90,6 @@ pub(crate) fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
     Ok(result)
 }
 
-/// Parse a flag value. Supports --flag=value, --flag value, -f value formats.
 fn parse_flag_value(
     arg: &str,
     long: &str,
@@ -100,7 +97,6 @@ fn parse_flag_value(
     args: &[String],
     i: &mut usize,
 ) -> Result<Option<String>, String> {
-    // --flag=value
     if !long.is_empty() {
         if let Some(val) = arg.strip_prefix(&format!("{}=", long)) {
             return Ok(Some(val.to_string()));
@@ -114,7 +110,6 @@ fn parse_flag_value(
         }
     }
 
-    // -f value
     if !short.is_empty() && arg == short {
         *i += 1;
         if *i >= args.len() {
@@ -126,8 +121,33 @@ fn parse_flag_value(
     Ok(None)
 }
 
+/// Install SIGINT/SIGTERM handler that sets the given shutdown flag.
+fn install_signal_handler(shutdown: &Arc<AtomicBool>) {
+    // Store a raw pointer to the AtomicBool for the signal handler.
+    // Safe because the AtomicBool lives in an Arc that outlives the process.
+    static mut SHUTDOWN_PTR: *const AtomicBool = std::ptr::null();
+
+    unsafe {
+        SHUTDOWN_PTR = Arc::as_ptr(shutdown);
+
+        extern "C" {
+            fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
+        }
+        extern "C" fn handler(_sig: i32) {
+            unsafe {
+                if !SHUTDOWN_PTR.is_null() {
+                    (*SHUTDOWN_PTR).store(true, Ordering::Relaxed);
+                }
+            }
+        }
+        signal(2, handler); // SIGINT
+        signal(15, handler); // SIGTERM
+    }
+}
+
 pub(crate) fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
-    exec_mod::install_signal_handler();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    install_signal_handler(&shutdown);
 
     let exclude = args
         .exclude_file
@@ -148,9 +168,19 @@ pub(crate) fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
         head: args.head,
     };
 
-    let targets = exec_mod::read_targets(io::stdin(), exclude.clone());
+    let targets = read_targets(io::stdin(), exclude.clone());
+    let (result_tx, result_rx) = crossbeam_channel::bounded::<ExecResult>(1024);
 
-    let w: Arc<Mutex<Box<dyn io::Write + Send>>> = Arc::new(Mutex::new(Box::new(io::stdout())));
+    // Spawn writer thread: receives results, serializes to JSON, prints to stdout
+    let writer_handle = std::thread::spawn(move || {
+        let stdout = io::stdout();
+        for result in result_rx {
+            if let Ok(json) = serde_json::to_string(&result) {
+                let mut out = stdout.lock();
+                let _ = writeln!(out, "{}", json);
+            }
+        }
+    });
 
     if let Some(ref jump_hosts_file) = args.jump_hosts_file {
         let mut hosts = StringSet::from_file(Path::new(jump_hosts_file))?;
@@ -167,10 +197,13 @@ pub(crate) fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
             jump_hosts: hosts.sorted_strings(),
         };
 
-        jumpexec::jump_exec(w, &jump_spec, targets)?;
+        jump_exec(&jump_spec, targets, result_tx, shutdown)?;
     } else {
-        exec_mod::exec(w, &spec, targets)?;
+        exec(&spec, targets, result_tx, shutdown)?;
     }
 
+    let _ = writer_handle.join();
     Ok(())
 }
+
+use std::io::Write;

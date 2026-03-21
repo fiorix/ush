@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Formats a Duration as a human-readable abbreviated string (e.g. "3.2s", "8m3s").
-pub(crate) fn format_duration(d: Duration) -> String {
+pub fn format_duration(d: Duration) -> String {
     let total_nanos = d.as_nanos();
 
     if total_nanos == 0 {
@@ -51,7 +51,7 @@ pub(crate) fn format_duration(d: Duration) -> String {
 }
 
 /// Parses a human-readable duration string (e.g., "1h2m3.5s", "100ms", "1.5µs").
-pub(crate) fn parse_duration(s: &str) -> Option<Duration> {
+pub fn parse_duration(s: &str) -> Option<Duration> {
     if s == "0s" {
         return Some(Duration::ZERO);
     }
@@ -105,7 +105,7 @@ pub(crate) fn parse_duration(s: &str) -> Option<Duration> {
 }
 
 /// Formats a SystemTime as RFC3339 with nanosecond precision.
-pub(crate) fn format_rfc3339_nano(t: SystemTime) -> String {
+pub fn format_rfc3339_nano(t: SystemTime) -> String {
     let dur = t.duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = dur.as_secs();
     let nanos = dur.subsec_nanos();

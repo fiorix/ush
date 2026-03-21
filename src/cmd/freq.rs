@@ -1,10 +1,10 @@
 use std::io;
 
-use crate::freq as freq_mod;
-use crate::time::parse_duration;
+use ush::freq as freq_mod;
+use ush::time::parse_duration;
 
 pub(crate) struct FreqArgs {
-    pub command: FreqCommand,
+    pub(crate) command: FreqCommand,
 }
 
 pub(crate) enum FreqCommand {
@@ -52,7 +52,6 @@ pub(crate) fn parse_args(args: &[String]) -> Result<FreqArgs, String> {
         }
         "duration" => {
             let json = has_json_flag(sub_args);
-            // Find the non-flag argument (the duration value)
             let value_str = sub_args
                 .iter()
                 .find(|a| *a != "--json")

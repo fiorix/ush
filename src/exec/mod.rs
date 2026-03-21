@@ -1,40 +1,22 @@
-pub(crate) mod jumpexec;
+pub mod jumpexec;
 
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime};
 
-use crate::json::escape_json_string;
+use crossbeam_channel as channel;
+use serde::{Deserialize, Serialize};
+
 use crate::strutil::StringSet;
 use crate::time::{format_duration, format_rfc3339_nano};
 
-/// Global shutdown flag set by signal handler.
-static SHUTDOWN: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn is_shutdown() -> bool {
-    SHUTDOWN.load(Ordering::Relaxed)
-}
-
-/// Install SIGINT/SIGTERM handler that sets the shutdown flag.
-pub(crate) fn install_signal_handler() {
-    unsafe {
-        extern "C" {
-            fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
-        }
-        extern "C" fn handler(_sig: i32) {
-            SHUTDOWN.store(true, Ordering::Relaxed);
-        }
-        signal(2, handler); // SIGINT
-        signal(15, handler); // SIGTERM
-    }
-    vlog!("[verbose] signal handler installed for SIGINT/SIGTERM");
-}
+// ── Error types ──────────────────────────────────────────────────────
 
 #[derive(Debug)]
-pub(crate) enum SpecError {
+pub enum SpecError {
     MissingCommand,
     ZeroTimeout,
     ZeroParallel,
@@ -56,18 +38,49 @@ impl std::fmt::Display for SpecError {
 
 impl std::error::Error for SpecError {}
 
-pub(crate) struct Spec {
-    pub(crate) command: String,
-    pub(crate) args: Vec<String>,
-    pub(crate) timeout: Duration,
-    pub(crate) parallel: usize,
-    pub(crate) stdout_bytes: usize,
-    pub(crate) stderr_bytes: usize,
-    pub(crate) head: bool,
+#[derive(Debug)]
+pub enum ExecError {
+    InvalidSpec(SpecError),
+    Io(io::Error),
+}
+
+impl std::fmt::Display for ExecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExecError::InvalidSpec(e) => write!(f, "invalid spec: {}", e),
+            ExecError::Io(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for ExecError {}
+
+impl From<SpecError> for ExecError {
+    fn from(e: SpecError) -> Self {
+        ExecError::InvalidSpec(e)
+    }
+}
+
+impl From<io::Error> for ExecError {
+    fn from(e: io::Error) -> Self {
+        ExecError::Io(e)
+    }
+}
+
+// ── Core types ───────────────────────────────────────────────────────
+
+pub struct Spec {
+    pub command: String,
+    pub args: Vec<String>,
+    pub timeout: Duration,
+    pub parallel: usize,
+    pub stdout_bytes: usize,
+    pub stderr_bytes: usize,
+    pub head: bool,
 }
 
 impl Spec {
-    pub(crate) fn validate(&self) -> Result<(), SpecError> {
+    pub fn validate(&self) -> Result<(), SpecError> {
         if self.command.is_empty() {
             return Err(SpecError::MissingCommand);
         }
@@ -87,48 +100,32 @@ impl Spec {
     }
 }
 
-struct ExecResult {
-    target: String,
-    duration: String,
-    start_time: SystemTime,
-    end_time: SystemTime,
-    exit_status: i32,
-    stdout: String,
-    stderr: String,
-    error: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecResult {
+    pub target: String,
+    pub duration: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub exit_status: i32,
+    pub stdout: String,
+    pub stderr: String,
+    #[serde(default)]
+    pub error: String,
 }
 
-impl ExecResult {
-    fn to_json(&self) -> String {
-        format!(
-            "{{\"target\":{},\"duration\":{},\"start_time\":{},\"end_time\":{},\"exit_status\":{},\"stdout\":{},\"stderr\":{},\"error\":{}}}",
-            escape_json_string(&self.target),
-            escape_json_string(&self.duration),
-            escape_json_string(&format_rfc3339_nano(self.start_time)),
-            escape_json_string(&format_rfc3339_nano(self.end_time)),
-            self.exit_status,
-            escape_json_string(&self.stdout),
-            escape_json_string(&self.stderr),
-            escape_json_string(&self.error),
-        )
-    }
-}
+// ── Public functions ─────────────────────────────────────────────────
 
-/// Reads targets from stdin, skipping empty lines, comments, and excluded targets.
-/// Uses a bounded channel to avoid unbounded memory growth with large target lists.
-pub(crate) fn read_targets(
+/// Reads targets from a reader, skipping empty lines, comments, and excluded targets.
+/// Returns a crossbeam channel receiver that yields target strings.
+pub fn read_targets(
     reader: impl io::Read + Send + 'static,
     exclude: Option<StringSet>,
-) -> mpsc::Receiver<String> {
-    let (tx, rx) = mpsc::sync_channel(1024);
+) -> channel::Receiver<String> {
+    let (tx, rx) = channel::bounded(1024);
 
     std::thread::spawn(move || {
         let buf = io::BufReader::new(reader);
-        for line in buf.lines() {
-            if is_shutdown() {
-                vlog!("[verbose] target reader: shutdown signal received, stopping");
-                break;
-            }
+        for line in io::BufRead::lines(buf) {
             let line = match line {
                 Ok(l) => l,
                 Err(_) => break,
@@ -151,15 +148,17 @@ pub(crate) fn read_targets(
     rx
 }
 
-/// Executes commands in parallel, writing JSON results to writer.
-pub(crate) fn exec(
-    w: Arc<Mutex<Box<dyn Write + Send>>>,
+/// Executes commands in parallel for each target received from the channel.
+/// Results are sent to the results channel as they complete.
+/// The shutdown flag can be set to stop accepting new targets.
+pub fn exec(
     spec: &Spec,
-    input: mpsc::Receiver<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+    targets: channel::Receiver<String>,
+    results: channel::Sender<ExecResult>,
+    shutdown: Arc<AtomicBool>,
+) -> Result<(), ExecError> {
     spec.validate()?;
 
-    let input = Arc::new(Mutex::new(input));
     let mut handles = Vec::new();
 
     vlog!(
@@ -170,8 +169,9 @@ pub(crate) fn exec(
     );
 
     for _ in 0..spec.parallel {
-        let input = input.clone();
-        let w = w.clone();
+        let targets = targets.clone();
+        let results = results.clone();
+        let shutdown = shutdown.clone();
         let command = spec.command.clone();
         let args = spec.args.clone();
         let timeout = spec.timeout;
@@ -179,42 +179,40 @@ pub(crate) fn exec(
         let stderr_bytes = spec.stderr_bytes;
         let head = spec.head;
 
-        let handle = std::thread::spawn(move || loop {
-            if is_shutdown() {
-                vlog!("[verbose] worker: shutdown signal received, stopping");
-                break;
-            }
-            let target = {
-                let rx = input.lock().unwrap();
-                rx.recv().ok()
-            };
-            match target {
-                Some(target) => {
-                    vlog!("[verbose] worker: executing target {}", target);
-                    let result = run_cmd(
-                        &command,
-                        &args,
-                        &target,
-                        timeout,
-                        stdout_bytes,
-                        stderr_bytes,
-                        head,
-                    );
-                    let json = result.to_json();
-                    let mut w = w.lock().unwrap();
-                    let _ = writeln!(w, "{}", json);
+        let handle = std::thread::spawn(move || {
+            while let Ok(target) = targets.recv() {
+                if shutdown.load(Ordering::Relaxed) {
+                    vlog!("[verbose] worker: shutdown signal received, stopping");
+                    break;
                 }
-                None => break,
+                vlog!("[verbose] worker: executing target {}", target);
+                let result = run_cmd(
+                    &command,
+                    &args,
+                    &target,
+                    timeout,
+                    stdout_bytes,
+                    stderr_bytes,
+                    head,
+                );
+                if results.send(result).is_err() {
+                    break;
+                }
             }
         });
         handles.push(handle);
     }
+
+    // Drop our copy of the senders so the results channel closes when workers finish
+    drop(results);
 
     for handle in handles {
         let _ = handle.join();
     }
     Ok(())
 }
+
+// ── Internal ─────────────────────────────────────────────────────────
 
 fn run_cmd(
     command: &str,
@@ -232,8 +230,8 @@ fn run_cmd(
     let mut result = ExecResult {
         target: target.to_string(),
         duration: String::new(),
-        start_time,
-        end_time: start_time,
+        start_time: format_rfc3339_nano(start_time),
+        end_time: String::new(),
         exit_status: 0,
         stdout: String::new(),
         stderr: String::new(),
@@ -249,7 +247,6 @@ fn run_cmd(
     // Set process group so we can kill the whole group on timeout
     unsafe {
         cmd.pre_exec(|| {
-            // setpgid(0, 0) — put child in its own process group
             let ret = syscall_setpgid(0, 0);
             if ret != 0 {
                 return Err(io::Error::last_os_error());
@@ -263,13 +260,9 @@ fn run_cmd(
         Err(e) => {
             vlog!("[verbose] run_cmd: failed to spawn {}: {}", cmd_str, e);
             result.error = e.to_string();
-            result.end_time = SystemTime::now();
-            result.duration = format_duration(
-                result
-                    .end_time
-                    .duration_since(result.start_time)
-                    .unwrap_or_default(),
-            );
+            let end = SystemTime::now();
+            result.end_time = format_rfc3339_nano(end);
+            result.duration = format_duration(end.duration_since(start_time).unwrap_or_default());
             return result;
         }
     };
@@ -282,7 +275,6 @@ fn run_cmd(
         cmd_str
     );
 
-    // Take ownership of stdout/stderr pipes for bounded capture
     let stdout_pipe = child.stdout.take().unwrap();
     let stderr_pipe = child.stderr.take().unwrap();
 
@@ -296,42 +288,37 @@ fn run_cmd(
     let _timeout_handle = std::thread::spawn(move || {
         let (lock, cvar) = &*done2;
 
-        // Wait for timeout or early finish
         let guard = lock.lock().unwrap();
         let (guard, _) = cvar.wait_timeout(guard, timeout).unwrap();
         if *guard {
-            return; // Command finished before timeout
+            return;
         }
         drop(guard);
 
-        // Timeout reached: send SIGTERM first
         vlog!(
             "[verbose] run_cmd: timeout reached for pid={}, sending SIGTERM",
             pid
         );
-        unsafe { syscall_kill(-pid, 15) }; // SIGTERM
+        unsafe { syscall_kill(-pid, 15) };
 
-        // Grace period for clean shutdown
         let grace = Duration::from_secs(5);
         let guard = lock.lock().unwrap();
         let (guard, _) = cvar.wait_timeout(guard, grace).unwrap();
         if *guard {
             vlog!("[verbose] run_cmd: pid={} exited after SIGTERM", pid);
-            return; // Process exited after SIGTERM
+            return;
         }
         drop(guard);
 
-        // Still alive: escalate to SIGKILL
         vlog!(
             "[verbose] run_cmd: grace period expired for pid={}, sending SIGKILL",
             pid
         );
-        unsafe { syscall_kill(-pid, 9) }; // SIGKILL
+        unsafe { syscall_kill(-pid, 9) };
     });
 
     let wait_result = child.wait();
 
-    // Signal the timeout thread that we're done (cancels sleep or prevents kill)
     {
         let (lock, cvar) = &*done;
         let mut finished = lock.lock().unwrap();
@@ -339,7 +326,6 @@ fn run_cmd(
         cvar.notify_one();
     }
 
-    // Collect bounded output from reader threads
     let stdout_capture = stdout_thread.join().unwrap();
     let stderr_capture = stderr_thread.join().unwrap();
 
@@ -367,35 +353,19 @@ fn run_cmd(
         }
     }
 
-    match stdout_capture {
-        Ok((data, truncated)) => {
-            result.stdout = bytes_to_string(&data, truncated, head);
-        }
-        Err(e) => {
-            vlog!("[verbose] run_cmd: pid={} stdout read error: {}", pid, e);
-        }
+    if let Ok((data, truncated)) = stdout_capture {
+        result.stdout = bytes_to_string(&data, truncated, head);
     }
-    match stderr_capture {
-        Ok((data, truncated)) => {
-            result.stderr = bytes_to_string(&data, truncated, head);
-        }
-        Err(e) => {
-            vlog!("[verbose] run_cmd: pid={} stderr read error: {}", pid, e);
-        }
+    if let Ok((data, truncated)) = stderr_capture {
+        result.stderr = bytes_to_string(&data, truncated, head);
     }
 
-    result.end_time = SystemTime::now();
-    result.duration = format_duration(
-        result
-            .end_time
-            .duration_since(result.start_time)
-            .unwrap_or_default(),
-    );
+    let end = SystemTime::now();
+    result.end_time = format_rfc3339_nano(end);
+    result.duration = format_duration(end.duration_since(start_time).unwrap_or_default());
     result
 }
 
-/// Read from a pipe with bounded memory usage.
-/// Returns (data, truncated) where truncated indicates output exceeded limit.
 fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(Vec<u8>, bool)> {
     let mut tmp = [0u8; 8192];
 
@@ -412,7 +382,6 @@ fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(
                 buf.extend_from_slice(&tmp[..take]);
             }
             if buf.len() >= limit {
-                // Drain remaining output to avoid blocking the child
                 loop {
                     let n = reader.read(&mut tmp)?;
                     if n == 0 {
@@ -424,7 +393,6 @@ fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(
         }
         Ok((buf, false))
     } else {
-        // Tail mode: keep last `limit` bytes
         let mut buf = Vec::new();
         let mut total_read = 0usize;
         loop {
@@ -434,7 +402,6 @@ fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(
             }
             buf.extend_from_slice(&tmp[..n]);
             total_read += n;
-            // Trim periodically to bound memory
             if buf.len() > limit * 2 {
                 let excess = buf.len() - limit;
                 buf.drain(..excess);
@@ -449,17 +416,14 @@ fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(
     }
 }
 
-/// Convert captured bytes to a string, respecting UTF-8 boundaries.
 fn bytes_to_string(data: &[u8], truncated: bool, head: bool) -> String {
     let s = if head {
-        // Truncate at last valid UTF-8 boundary
         let end = match std::str::from_utf8(data) {
             Ok(_) => data.len(),
             Err(e) => e.valid_up_to(),
         };
         String::from_utf8_lossy(&data[..end]).to_string()
     } else {
-        // Skip past partial UTF-8 continuation bytes at start
         let start = utf8_skip_continuation(data);
         String::from_utf8_lossy(&data[start..]).to_string()
     };
@@ -475,7 +439,6 @@ fn bytes_to_string(data: &[u8], truncated: bool, head: bool) -> String {
     }
 }
 
-/// Find the first byte that is not a UTF-8 continuation byte (0x80..0xBF).
 fn utf8_skip_continuation(data: &[u8]) -> usize {
     for (i, &b) in data.iter().enumerate() {
         if b < 0x80 || (b & 0xC0) != 0x80 {
@@ -513,14 +476,11 @@ mod tests {
 
     #[test]
     fn test_bytes_to_string_utf8_boundary() {
-        // "café" in UTF-8: 63 61 66 c3 a9
-        // Simulate head truncation at byte 4 (splits 'é')
-        let data = &"café".as_bytes()[..4]; // "caf" + 0xc3
+        let data = &"café".as_bytes()[..4];
         let result = bytes_to_string(data, true, true);
         assert_eq!(result, "caf[...]");
 
-        // Simulate tail truncation: starts with a continuation byte (0xa9)
-        let data = &"café".as_bytes()[1..]; // 0x61 0x66 0xc3 0xa9 — valid, starts at 'a'
+        let data = &"café".as_bytes()[1..];
         let result = bytes_to_string(data, true, false);
         assert_eq!(result, "[...]afé");
     }
@@ -578,8 +538,6 @@ mod tests {
 
     #[test]
     fn test_exec() {
-        use std::sync::Arc;
-
         let spec = Spec {
             command: "echo".to_string(),
             args: vec!["{}".to_string()],
@@ -590,35 +548,22 @@ mod tests {
             head: true,
         };
 
-        let (tx, rx) = mpsc::channel();
-        tx.send("hello world".to_string()).unwrap();
-        drop(tx);
+        let (target_tx, target_rx) = channel::bounded(1);
+        let (result_tx, result_rx) = channel::bounded(10);
 
-        let shared_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let shared_buf2 = shared_buf.clone();
+        target_tx.send("hello world".to_string()).unwrap();
+        drop(target_tx);
 
-        let w: Arc<Mutex<Box<dyn Write + Send>>> =
-            Arc::new(Mutex::new(Box::new(SharedVecWriter(shared_buf2))));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        exec(&spec, target_rx, result_tx, shutdown).unwrap();
 
-        exec(w, &spec, rx).unwrap();
+        let result = result_rx.recv().unwrap();
+        assert_eq!(result.target, "hello world");
+        assert_eq!(result.stdout, "hello[...]");
+        assert_eq!(result.exit_status, 0);
 
-        let output = shared_buf.lock().unwrap();
-        let output_str = String::from_utf8(output.clone()).unwrap();
-        let line = output_str.trim();
-
-        assert!(line.contains("\"target\":\"hello world\""), "got: {}", line);
-        assert!(line.contains("\"stdout\":\"hello[...]\""), "got: {}", line);
-        assert!(line.contains("\"exit_status\":0"), "got: {}", line);
-    }
-
-    struct SharedVecWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for SharedVecWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().write(buf)
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
+        // Verify it serializes to valid JSON
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"target\":\"hello world\""));
     }
 }

@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn set_verbose(v: bool) {
+pub fn set_verbose(v: bool) {
     VERBOSE.store(v, Ordering::Relaxed);
 }
 
-pub(crate) fn is_verbose() -> bool {
+pub fn is_verbose() -> bool {
     VERBOSE.load(Ordering::Relaxed)
 }
 
