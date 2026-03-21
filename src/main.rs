@@ -1,3 +1,6 @@
+#[macro_use]
+mod verbose;
+
 mod cmd;
 mod exec;
 mod freq;
@@ -8,31 +11,35 @@ mod time;
 use std::env;
 use std::process;
 
-const VERSION: &str = "rush v1.1";
+const VERSION: &str = "ush v1.2";
 
 const USAGE: &str = "\
-Usage: rush <command> [flags]
+Usage: ush [flags] <command> [command-flags]
 
 Commands:
   exec    Execute parallel commands from standard input
   freq    Print frequency of events from exec JSON output
 
-Use \"rush <command> --help\" for more information about a command.";
+Global flags:
+  -v, --verbose    Enable verbose diagnostic output to stderr
+      --version    Print version and exit
+
+Use \"ush <command> --help\" for more information about a command.";
 
 const EXEC_USAGE: &str = "\
-Usage: rush exec [flags] -- <command> [args...]
+Usage: ush exec [flags] -- <command> [args...]
 
 Execute parallel commands from standard input.
 
-rush works by consuming line-oriented data from stdin, and uses that information
+ush works by consuming line-oriented data from stdin, and uses that information
 to compose and execute commands from a templated command line.
 
-Each line written to standard input is a target to rush. When you compose your
+Each line written to standard input is a target to ush. When you compose your
 command, you refer to the target by using the {} template markup.
 
 Example running 2 echo commands:
 
-    echo -ne 'hello\\nworld\\n' | rush exec -- echo {}
+    echo -ne 'hello\\nworld\\n' | ush exec -- echo {}
 
 Flags:
   -t, --timeout <duration>    timeout of each command execution (default: 1m)
@@ -46,7 +53,7 @@ Flags:
       --jump_cmd <cmd>        jump command template (default: ssh -A ...)";
 
 const FREQ_USAGE: &str = "\
-Usage: rush freq <subcommand> [flags]
+Usage: ush freq <subcommand> [flags]
 
 Print frequency of events from exec JSON output.
 
@@ -60,7 +67,7 @@ Flags:
   --json    encode output as JSON
 
 Example:
-    echo -ne 'foo\\nbar\\n' | rush exec -- echo {} | rush freq stdout";
+    echo -ne 'foo\\nbar\\n' | ush exec -- echo {} | ush freq stdout";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -70,17 +77,37 @@ fn main() {
         process::exit(1);
     }
 
-    match args[0].as_str() {
-        "--help" | "-h" | "help" => {
-            println!("{}", USAGE);
-            return;
+    // Parse global flags before subcommand
+    let mut sub_start = 0;
+    for (i, arg) in args.iter().enumerate() {
+        match arg.as_str() {
+            "--verbose" | "-v" => {
+                verbose::set_verbose(true);
+            }
+            "--help" | "-h" | "help" => {
+                println!("{}", USAGE);
+                return;
+            }
+            "--version" => {
+                println!("{}", VERSION);
+                return;
+            }
+            _ => {
+                sub_start = i;
+                break;
+            }
         }
-        "--version" | "-v" => {
-            println!("{}", VERSION);
-            return;
-        }
+        sub_start = i + 1;
+    }
+
+    if sub_start >= args.len() {
+        eprintln!("{}", USAGE);
+        process::exit(1);
+    }
+
+    match args[sub_start].as_str() {
         "exec" => {
-            let sub_args = &args[1..];
+            let sub_args = &args[sub_start + 1..];
             if sub_args.is_empty() || sub_args.iter().any(|a| a == "--help" || a == "-h") {
                 eprintln!("{}", EXEC_USAGE);
                 if sub_args.is_empty() {
@@ -103,7 +130,7 @@ fn main() {
             }
         }
         "freq" => {
-            let sub_args = &args[1..];
+            let sub_args = &args[sub_start + 1..];
             if sub_args.is_empty() || sub_args.iter().any(|a| a == "--help" || a == "-h") {
                 eprintln!("{}", FREQ_USAGE);
                 if sub_args.is_empty() {

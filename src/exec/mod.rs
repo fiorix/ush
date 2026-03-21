@@ -1,15 +1,37 @@
 pub mod jumpexec;
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, SystemTime};
 
 use crate::json::escape_json_string;
 use crate::strutil::StringSet;
 use crate::time::{format_go_duration, format_rfc3339_nano};
+
+/// Global shutdown flag set by signal handler.
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+pub fn is_shutdown() -> bool {
+    SHUTDOWN.load(Ordering::SeqCst)
+}
+
+/// Install SIGINT/SIGTERM handler that sets the shutdown flag.
+pub fn install_signal_handler() {
+    unsafe {
+        extern "C" {
+            fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
+        }
+        extern "C" fn handler(_sig: i32) {
+            SHUTDOWN.store(true, Ordering::SeqCst);
+        }
+        signal(2, handler); // SIGINT
+        signal(15, handler); // SIGTERM
+    }
+    vlog!("[verbose] signal handler installed for SIGINT/SIGTERM");
+}
 
 #[derive(Debug)]
 pub enum SpecError {
@@ -93,15 +115,20 @@ impl ExecResult {
 }
 
 /// Reads targets from stdin, skipping empty lines, comments, and excluded targets.
+/// Uses a bounded channel to avoid unbounded memory growth with large target lists.
 pub fn read_targets(
     reader: impl io::Read + Send + 'static,
     exclude: Option<StringSet>,
 ) -> mpsc::Receiver<String> {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(1024);
 
     std::thread::spawn(move || {
         let buf = io::BufReader::new(reader);
         for line in buf.lines() {
+            if is_shutdown() {
+                vlog!("[verbose] target reader: shutdown signal received, stopping");
+                break;
+            }
             let line = match line {
                 Ok(l) => l,
                 Err(_) => break,
@@ -111,6 +138,7 @@ pub fn read_targets(
             }
             if let Some(ref exc) = exclude {
                 if exc.contains(&line) {
+                    vlog!("[verbose] target reader: excluding {}", line);
                     continue;
                 }
             }
@@ -134,6 +162,8 @@ pub fn exec(
     let input = Arc::new(Mutex::new(input));
     let mut handles = Vec::new();
 
+    vlog!("[verbose] exec: starting {} worker(s), timeout={}, command={}", spec.parallel, format_go_duration(spec.timeout), spec.command);
+
     for _ in 0..spec.parallel {
         let input = input.clone();
         let w = w.clone();
@@ -146,12 +176,17 @@ pub fn exec(
 
         let handle = std::thread::spawn(move || {
             loop {
+                if is_shutdown() {
+                    vlog!("[verbose] worker: shutdown signal received, stopping");
+                    break;
+                }
                 let target = {
                     let rx = input.lock().unwrap();
                     rx.recv().ok()
                 };
                 match target {
                     Some(target) => {
+                        vlog!("[verbose] worker: executing target {}", target);
                         let result =
                             run_cmd(&command, &args, &target, timeout, stdout_bytes, stderr_bytes, head);
                         let json = result.to_json();
@@ -197,6 +232,7 @@ fn run_cmd(
 
     let mut cmd = Command::new(&cmd_str);
     cmd.args(&replaced_args);
+    cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -212,9 +248,10 @@ fn run_cmd(
         });
     }
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {
+            vlog!("[verbose] run_cmd: failed to spawn {}: {}", cmd_str, e);
             result.error = e.to_string();
             result.end_time = SystemTime::now();
             result.duration = format_go_duration(result.end_time.duration_since(result.start_time).unwrap_or_default());
@@ -223,47 +260,206 @@ fn run_cmd(
     };
 
     let pid = child.id() as i32;
-    let should_kill = Arc::new(AtomicBool::new(true));
-    let should_kill2 = should_kill.clone();
+    vlog!("[verbose] run_cmd: spawned pid={} pgid={} cmd={}", pid, pid, cmd_str);
 
-    // Spawn timeout killer thread
-    let _timeout_handle = std::thread::spawn(move || {
-        std::thread::sleep(timeout);
-        if should_kill2.load(Ordering::SeqCst) {
-            // kill(-pgid, SIGKILL)
-            unsafe { syscall_kill(-pid, 9) };
-        }
+    // Take ownership of stdout/stderr pipes for bounded capture
+    let stdout_pipe = child.stdout.take().unwrap();
+    let stderr_pipe = child.stderr.take().unwrap();
+
+    let stdout_lim = stdout_limit;
+    let stderr_lim = stderr_limit;
+    let head_mode = head;
+
+    let stdout_thread = std::thread::spawn(move || {
+        bounded_read(stdout_pipe, stdout_lim, head_mode)
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        bounded_read(stderr_pipe, stderr_lim, head_mode)
     });
 
-    let output = child.wait_with_output();
-    should_kill.store(false, Ordering::SeqCst);
-    // Don't join timeout thread — it will exit on its own
+    // Condvar-based timeout: supports early cancellation and SIGTERM-before-SIGKILL
+    let done = Arc::new((Mutex::new(false), Condvar::new()));
+    let done2 = done.clone();
 
-    match output {
-        Ok(output) => {
-            if !output.status.success() {
-                result.exit_status = output.status.code().unwrap_or(-1);
-                if let Some(sig) = output.status.signal() {
+    let _timeout_handle = std::thread::spawn(move || {
+        let (lock, cvar) = &*done2;
+
+        // Wait for timeout or early finish
+        let guard = lock.lock().unwrap();
+        let (guard, _) = cvar.wait_timeout(guard, timeout).unwrap();
+        if *guard {
+            return; // Command finished before timeout
+        }
+        drop(guard);
+
+        // Timeout reached: send SIGTERM first
+        vlog!("[verbose] run_cmd: timeout reached for pid={}, sending SIGTERM", pid);
+        unsafe { syscall_kill(-pid, 15) }; // SIGTERM
+
+        // Grace period for clean shutdown
+        let grace = Duration::from_secs(5);
+        let guard = lock.lock().unwrap();
+        let (guard, _) = cvar.wait_timeout(guard, grace).unwrap();
+        if *guard {
+            vlog!("[verbose] run_cmd: pid={} exited after SIGTERM", pid);
+            return; // Process exited after SIGTERM
+        }
+        drop(guard);
+
+        // Still alive: escalate to SIGKILL
+        vlog!("[verbose] run_cmd: grace period expired for pid={}, sending SIGKILL", pid);
+        unsafe { syscall_kill(-pid, 9) }; // SIGKILL
+    });
+
+    let wait_result = child.wait();
+
+    // Signal the timeout thread that we're done (cancels sleep or prevents kill)
+    {
+        let (lock, cvar) = &*done;
+        let mut finished = lock.lock().unwrap();
+        *finished = true;
+        cvar.notify_one();
+    }
+
+    // Collect bounded output from reader threads
+    let stdout_capture = stdout_thread.join().unwrap();
+    let stderr_capture = stderr_thread.join().unwrap();
+
+    match wait_result {
+        Ok(status) => {
+            if !status.success() {
+                result.exit_status = status.code().unwrap_or(-1);
+                if let Some(sig) = status.signal() {
                     result.error = match sig {
                         9 => "signal: killed".to_string(),
+                        15 => "signal: terminated".to_string(),
                         _ => format!("signal: {}", sig),
                     };
                     result.exit_status = -1;
+                    vlog!("[verbose] run_cmd: pid={} {}", pid, result.error);
                 } else {
                     result.error = format!("exit status {}", result.exit_status);
+                    vlog!("[verbose] run_cmd: pid={} {}", pid, result.error);
                 }
             }
-            result.stdout = lossy_capture(&output.stdout, stdout_limit, head);
-            result.stderr = lossy_capture(&output.stderr, stderr_limit, head);
         }
         Err(e) => {
             result.error = e.to_string();
+            vlog!("[verbose] run_cmd: pid={} wait error: {}", pid, e);
+        }
+    }
+
+    match stdout_capture {
+        Ok((data, truncated)) => {
+            result.stdout = bytes_to_string(&data, truncated, head);
+        }
+        Err(e) => {
+            vlog!("[verbose] run_cmd: pid={} stdout read error: {}", pid, e);
+        }
+    }
+    match stderr_capture {
+        Ok((data, truncated)) => {
+            result.stderr = bytes_to_string(&data, truncated, head);
+        }
+        Err(e) => {
+            vlog!("[verbose] run_cmd: pid={} stderr read error: {}", pid, e);
         }
     }
 
     result.end_time = SystemTime::now();
     result.duration = format_go_duration(result.end_time.duration_since(result.start_time).unwrap_or_default());
     result
+}
+
+/// Read from a pipe with bounded memory usage.
+/// Returns (data, truncated) where truncated indicates output exceeded limit.
+fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(Vec<u8>, bool)> {
+    let mut tmp = [0u8; 8192];
+
+    if head {
+        let mut buf = Vec::with_capacity(limit);
+        loop {
+            let n = reader.read(&mut tmp)?;
+            if n == 0 {
+                break;
+            }
+            let remaining = limit.saturating_sub(buf.len());
+            if remaining > 0 {
+                let take = std::cmp::min(n, remaining);
+                buf.extend_from_slice(&tmp[..take]);
+            }
+            if buf.len() >= limit {
+                // Drain remaining output to avoid blocking the child
+                loop {
+                    let n = reader.read(&mut tmp)?;
+                    if n == 0 {
+                        break;
+                    }
+                }
+                return Ok((buf, true));
+            }
+        }
+        Ok((buf, false))
+    } else {
+        // Tail mode: keep last `limit` bytes
+        let mut buf = Vec::new();
+        let mut total_read = 0usize;
+        loop {
+            let n = reader.read(&mut tmp)?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            total_read += n;
+            // Trim periodically to bound memory
+            if buf.len() > limit * 2 {
+                let excess = buf.len() - limit;
+                buf.drain(..excess);
+            }
+        }
+        let truncated = total_read > limit;
+        if buf.len() > limit {
+            let excess = buf.len() - limit;
+            buf.drain(..excess);
+        }
+        Ok((buf, truncated))
+    }
+}
+
+/// Convert captured bytes to a string, respecting UTF-8 boundaries.
+fn bytes_to_string(data: &[u8], truncated: bool, head: bool) -> String {
+    let s = if head {
+        // Truncate at last valid UTF-8 boundary
+        let end = match std::str::from_utf8(data) {
+            Ok(_) => data.len(),
+            Err(e) => e.valid_up_to(),
+        };
+        String::from_utf8_lossy(&data[..end]).to_string()
+    } else {
+        // Skip past partial UTF-8 continuation bytes at start
+        let start = utf8_skip_continuation(data);
+        String::from_utf8_lossy(&data[start..]).to_string()
+    };
+
+    if truncated {
+        if head {
+            format!("{}[...]", s)
+        } else {
+            format!("[...]{}", s)
+        }
+    } else {
+        s
+    }
+}
+
+/// Find the first byte that is not a UTF-8 continuation byte (0x80..0xBF).
+fn utf8_skip_continuation(data: &[u8]) -> usize {
+    for (i, &b) in data.iter().enumerate() {
+        if b < 0x80 || (b & 0xC0) != 0x80 {
+            return i;
+        }
+    }
+    data.len()
 }
 
 unsafe fn syscall_setpgid(pid: i32, pgid: i32) -> i32 {
@@ -280,14 +476,21 @@ unsafe fn syscall_kill(pid: i32, sig: i32) -> i32 {
     kill(pid, sig)
 }
 
+#[cfg(test)]
 fn lossy_capture(data: &[u8], limit: usize, head: bool) -> String {
     if data.len() <= limit {
         String::from_utf8_lossy(data).to_string()
     } else if head {
-        let truncated = String::from_utf8_lossy(&data[..limit]);
+        let end = match std::str::from_utf8(&data[..limit]) {
+            Ok(_) => limit,
+            Err(e) => e.valid_up_to(),
+        };
+        let truncated = String::from_utf8_lossy(&data[..end]);
         format!("{}[...]", truncated)
     } else {
-        let truncated = String::from_utf8_lossy(&data[data.len() - limit..]);
+        let start_offset = data.len() - limit;
+        let start = start_offset + utf8_skip_continuation(&data[start_offset..]);
+        let truncated = String::from_utf8_lossy(&data[start..]);
         format!("[...]{}", truncated)
     }
 }
@@ -318,6 +521,46 @@ mod tests {
         assert_eq!(lossy_capture(b"hello", 10, false), "hello");
         assert_eq!(lossy_capture(b"hello world", 5, true), "hello[...]");
         assert_eq!(lossy_capture(b"hello world", 5, false), "[...]world");
+    }
+
+    #[test]
+    fn test_lossy_capture_utf8_boundary() {
+        // "café" in UTF-8: 63 61 66 c3 a9
+        let data = "café".as_bytes();
+        // Truncate at 4 bytes: splits the 'é' (c3 a9)
+        let result = lossy_capture(data, 4, true);
+        // Should back up to before the partial UTF-8 char
+        assert_eq!(result, "caf[...]");
+
+        // Tail mode: skip continuation byte at start
+        let result = lossy_capture(data, 4, false);
+        // Should skip the orphaned continuation byte
+        assert!(result.starts_with("[...]"));
+        assert!(result.contains("afé") || result.contains("café"));
+    }
+
+    #[test]
+    fn test_bounded_read_head() {
+        let data = b"hello world, this is a test";
+        let (buf, truncated) = bounded_read(&data[..], 5, true).unwrap();
+        assert_eq!(&buf, b"hello");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn test_bounded_read_tail() {
+        let data = b"hello world";
+        let (buf, truncated) = bounded_read(&data[..], 5, false).unwrap();
+        assert_eq!(&buf, b"world");
+        assert!(truncated);
+    }
+
+    #[test]
+    fn test_bounded_read_no_truncation() {
+        let data = b"hi";
+        let (buf, truncated) = bounded_read(&data[..], 10, false).unwrap();
+        assert_eq!(&buf, b"hi");
+        assert!(!truncated);
     }
 
     #[test]

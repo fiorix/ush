@@ -121,6 +121,8 @@ fn parse_flag_value(
 }
 
 pub fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
+    exec_mod::install_signal_handler();
+
     let exclude = match &args.exclude_file {
         Some(f) => Some(StringSet::from_file(Path::new(f))?),
         None => None,

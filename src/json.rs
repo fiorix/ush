@@ -88,7 +88,32 @@ fn parse_json_string(s: &str) -> Option<(String, &str)> {
                             }
                         }
                         if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                            if let Some(c) = char::from_u32(cp) {
+                            // Handle UTF-16 surrogate pairs
+                            if (0xD800..=0xDBFF).contains(&cp) {
+                                // High surrogate — expect \uDCxx low surrogate
+                                if chars.next() == Some('\\') && chars.next() == Some('u') {
+                                    byte_count += 2;
+                                    let mut hex2 = String::new();
+                                    for _ in 0..4 {
+                                        match chars.next() {
+                                            Some(c) => {
+                                                hex2.push(c);
+                                                byte_count += c.len_utf8();
+                                            }
+                                            None => return None,
+                                        }
+                                    }
+                                    if let Ok(low) = u32::from_str_radix(&hex2, 16) {
+                                        if (0xDC00..=0xDFFF).contains(&low) {
+                                            let combined = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                                            if let Some(c) = char::from_u32(combined) {
+                                                result.push(c);
+                                            }
+                                        }
+                                    }
+                                }
+                                // If low surrogate doesn't follow, skip the high surrogate
+                            } else if let Some(c) = char::from_u32(cp) {
                                 result.push(c);
                             }
                         }
@@ -255,6 +280,21 @@ mod tests {
         assert_eq!(escape_json_string("hello"), "\"hello\"");
         assert_eq!(escape_json_string("he\"llo"), "\"he\\\"llo\"");
         assert_eq!(escape_json_string("he\nllo"), "\"he\\nllo\"");
+    }
+
+    #[test]
+    fn test_parse_surrogate_pairs() {
+        // U+1F600 (grinning face) encoded as surrogate pair: \uD83D\uDE00
+        let (v, _) = parse_json_value("\"\\uD83D\\uDE00\"").unwrap();
+        assert_eq!(v.as_str().unwrap(), "\u{1F600}");
+
+        // U+1F4A9 (pile of poo) encoded as surrogate pair: \uD83D\uDCA9
+        let (v, _) = parse_json_value("\"\\uD83D\\uDCA9\"").unwrap();
+        assert_eq!(v.as_str().unwrap(), "\u{1F4A9}");
+
+        // Regular BMP character should still work
+        let (v, _) = parse_json_value("\"\\u0041\"").unwrap();
+        assert_eq!(v.as_str().unwrap(), "A");
     }
 
     #[test]
