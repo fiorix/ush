@@ -43,15 +43,15 @@ ush works by consuming line-oriented data from stdin, and uses that information
 to compose and execute commands from a templated command line.
 
 Each line written to standard input is a target to ush. When you compose your
-command, you refer to the target by using the {.T} template markup.
+command, you refer to the target by using the {} template markup.
 
 Example running 2 echo commands:
 
-	echo -ne 'hello\nworld\n' | ush exec -- echo {.T}
+	echo -ne 'hello\nworld\n' | ush exec -- echo {}
 
 Example running hostid (or any other command) via ssh using a list of hosts:
 
-	cat hosts.txt | ush exec -- ssh user@{.T} -- hostid
+	cat hosts.txt | ush exec -- ssh user@{} -- hostid
 
 ush provides an execution mode that makes use of jump hosts to amplify its
 capabilities of running parallel ssh. For example, using 100 jump hosts doing
@@ -60,7 +60,7 @@ but powerful at the same time.
 
 Example using jump hosts:
 
-	cat hosts.txt | ush exec -j jump_hosts.txt -k jump.key -- ssh user@{.T} -- hostid
+	cat hosts.txt | ush exec -j jump_hosts.txt -k jump.key -- ssh user@{} -- hostid
 
 If -j is specified, ush opens an ssh session to each jump host and runs ush
 there with the same <command>. It then pipes a portion of its own stdin to each
@@ -84,7 +84,7 @@ Flags:
   -e, --exclude string      file containing target and jump host exclusion list, one per line
   -f, --file host:port      path to a local file or a remote address host:port. Avoid serving large files as whole content is stored in memory and cached
   -h, --help                help for exec
-      --jump_cmd string     jump command where {.J} is replaced with a jump host (default "ssh -A -oBatchMode=yes -oConnectTimeout=10 {.J}")
+      --jump_cmd string     jump command where {jump} is replaced with a jump host (default "ssh -A -oBatchMode=yes -oConnectTimeout=10 {jump}")
   -j, --jump_hosts string   file containing jump hosts, one per line
   -k, --jump_key string     file containing ssh key to add to ssh-agent
   -p, --parallel int        number of parallel commands to execute (default 1)
@@ -101,11 +101,11 @@ Use the ush freq command to compute results from ush exec.
 
 Examples:
 
-	echo hello world | ush exec -- echo {.T} | ush freq exitstatus
+	echo hello world | ush exec -- echo {} | ush freq exitstatus
 
-	echo -ne 'foo\nbar\n' | ush exec -- echo {.T} | ush freq stdout
+	echo -ne 'foo\nbar\n' | ush exec -- echo {} | ush freq stdout
 
-	for x in {1..3}; do echo $x; done | ush exec -p 3 -- sleep {.T} | ush freq duration 1s
+	for x in {1..3}; do echo $x; done | ush exec -p 3 -- sleep {} | ush freq duration 1s
 
 Usage:
   ush freq [command]

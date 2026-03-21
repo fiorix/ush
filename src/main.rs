@@ -28,11 +28,11 @@ rush works by consuming line-oriented data from stdin, and uses that information
 to compose and execute commands from a templated command line.
 
 Each line written to standard input is a target to rush. When you compose your
-command, you refer to the target by using the {.T} template markup.
+command, you refer to the target by using the {} template markup.
 
 Example running 2 echo commands:
 
-    echo -ne 'hello\\nworld\\n' | rush exec -- echo {.T}
+    echo -ne 'hello\\nworld\\n' | rush exec -- echo {}
 
 Flags:
   -t, --timeout <duration>    timeout of each command execution (default: 1m)
@@ -59,7 +59,7 @@ Flags:
   --json    encode output as JSON
 
 Example:
-    echo -ne 'foo\\nbar\\n' | rush exec -- echo {.T} | rush freq stdout";
+    echo -ne 'foo\\nbar\\n' | rush exec -- echo {} | rush freq stdout";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();

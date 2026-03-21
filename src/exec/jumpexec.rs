@@ -4,7 +4,7 @@ use std::sync::{mpsc, Arc, Mutex};
 
 use super::Spec;
 
-pub const DEFAULT_JUMP_COMMAND: &str = "ssh -A -oBatchMode=yes -oConnectTimeout=10 {.J}";
+pub const DEFAULT_JUMP_COMMAND: &str = "ssh -A -oBatchMode=yes -oConnectTimeout=10 {jump}";
 
 pub struct JumpSpec {
     pub spec: Spec,
@@ -45,7 +45,7 @@ pub fn jump_exec(
             ssh_add_key(host, &authsock, &spec.jump_hosts_key_file)?;
         }
 
-        let cmd_str = spec.jump_command.replace("{.J}", host);
+        let cmd_str = spec.jump_command.replace("{jump}", host);
         let parts: Vec<&str> = cmd_str.split_whitespace().collect();
         if parts.is_empty() {
             return Err("empty jump command".into());

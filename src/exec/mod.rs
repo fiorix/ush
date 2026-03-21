@@ -178,8 +178,8 @@ fn run_cmd(
     stderr_limit: usize,
 ) -> ExecResult {
     let start_time = SystemTime::now();
-    let cmd_str = command.replace("{.T}", target);
-    let replaced_args: Vec<String> = args.iter().map(|a| a.replace("{.T}", target)).collect();
+    let cmd_str = command.replace("{}", target);
+    let replaced_args: Vec<String> = args.iter().map(|a| a.replace("{}", target)).collect();
 
     let mut result = ExecResult {
         target: target.to_string(),
@@ -344,7 +344,7 @@ mod tests {
 
         let spec = Spec {
             command: "echo".to_string(),
-            args: vec!["{.T}".to_string()],
+            args: vec!["{}".to_string()],
             timeout: Duration::from_secs(1),
             parallel: 1,
             stdout_bytes: 5,
