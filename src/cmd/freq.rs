@@ -1,73 +1,48 @@
 use std::io;
 
+use clap::{Args, Subcommand};
 use ush::freq as freq_mod;
 use ush::time::parse_duration;
 
+fn parse_duration_clap(s: &str) -> Result<std::time::Duration, String> {
+    parse_duration(s).ok_or_else(|| format!("invalid duration: {s}"))
+}
+
+#[derive(Args)]
 pub(crate) struct FreqArgs {
+    #[command(subcommand)]
     pub(crate) command: FreqCommand,
 }
 
+#[derive(Subcommand)]
 pub(crate) enum FreqCommand {
+    /// Print frequency of similar stdout
     Stdout {
+        /// Encode output as JSON
+        #[arg(long)]
         json: bool,
     },
+    /// Print frequency of similar stderr
     Stderr {
+        /// Encode output as JSON
+        #[arg(long)]
         json: bool,
     },
+    /// Print frequency of similar exit status
     Exitstatus {
+        /// Encode output as JSON
+        #[arg(long)]
         json: bool,
     },
+    /// Print execution duration distribution
     Duration {
-        json: bool,
+        /// Duration bucket size (e.g., 5s, 1m)
+        #[arg(value_parser = parse_duration_clap)]
         value: std::time::Duration,
+        /// Encode output as JSON
+        #[arg(long)]
+        json: bool,
     },
-}
-
-pub(crate) fn parse_args(args: &[String]) -> Result<FreqArgs, String> {
-    if args.is_empty() {
-        return Err("freq requires a subcommand: stdout, stderr, exitstatus, duration".to_string());
-    }
-
-    let subcmd = &args[0];
-    let sub_args = &args[1..];
-
-    match subcmd.as_str() {
-        "stdout" => {
-            let json = has_json_flag(sub_args);
-            Ok(FreqArgs {
-                command: FreqCommand::Stdout { json },
-            })
-        }
-        "stderr" => {
-            let json = has_json_flag(sub_args);
-            Ok(FreqArgs {
-                command: FreqCommand::Stderr { json },
-            })
-        }
-        "exitstatus" => {
-            let json = has_json_flag(sub_args);
-            Ok(FreqArgs {
-                command: FreqCommand::Exitstatus { json },
-            })
-        }
-        "duration" => {
-            let json = has_json_flag(sub_args);
-            let value_str = sub_args
-                .iter()
-                .find(|a| *a != "--json")
-                .ok_or_else(|| "duration requires a value argument, e.g. 5s".to_string())?;
-            let value = parse_duration(value_str)
-                .ok_or_else(|| format!("invalid duration: {}", value_str))?;
-            Ok(FreqArgs {
-                command: FreqCommand::Duration { json, value },
-            })
-        }
-        _ => Err(format!("unknown freq subcommand: {}", subcmd)),
-    }
-}
-
-fn has_json_flag(args: &[String]) -> bool {
-    args.iter().any(|a| a == "--json")
 }
 
 pub(crate) fn run(args: &FreqArgs) -> Result<(), Box<dyn std::error::Error>> {

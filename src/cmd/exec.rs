@@ -4,121 +4,56 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use clap::Args;
 use ush::strutil::StringSet;
 use ush::time::parse_duration;
 use ush::{exec, jump_exec, read_targets, ExecResult, JumpSpec, Spec, DEFAULT_JUMP_COMMAND};
 
+fn parse_duration_clap(s: &str) -> Result<Duration, String> {
+    parse_duration(s).ok_or_else(|| format!("invalid duration: {s}"))
+}
+
+#[derive(Args)]
 pub(crate) struct ExecArgs {
+    /// Timeout of each command execution [default: 1m]
+    #[arg(short = 't', long, default_value = "1m", value_parser = parse_duration_clap)]
     pub(crate) timeout: Duration,
+
+    /// Number of parallel commands to execute
+    #[arg(short = 'p', long, default_value_t = 1)]
     pub(crate) parallel: usize,
+
+    /// Number of bytes to read from command's stdout
+    #[arg(long = "stdout_bytes", default_value_t = 4096)]
     pub(crate) stdout_bytes: usize,
+
+    /// Number of bytes to read from command's stderr
+    #[arg(long = "stderr_bytes", default_value_t = 4096)]
     pub(crate) stderr_bytes: usize,
+
+    /// Capture first N bytes instead of last N bytes
+    #[arg(long)]
     pub(crate) head: bool,
+
+    /// File containing target exclusion list
+    #[arg(short = 'e', long = "exclude")]
     pub(crate) exclude_file: Option<String>,
+
+    /// File containing jump hosts
+    #[arg(short = 'j', long = "jump_hosts")]
     pub(crate) jump_hosts_file: Option<String>,
+
+    /// SSH key file for jump hosts
+    #[arg(short = 'k', long = "jump_key")]
     pub(crate) jump_key: Option<String>,
+
+    /// Jump command template
+    #[arg(long = "jump_cmd", default_value = DEFAULT_JUMP_COMMAND)]
     pub(crate) jump_cmd: String,
+
+    /// Command to execute (after --)
+    #[arg(last = true, required = true)]
     pub(crate) command: Vec<String>,
-}
-
-impl Default for ExecArgs {
-    fn default() -> Self {
-        Self {
-            timeout: Duration::from_secs(60),
-            parallel: 1,
-            stdout_bytes: 4096,
-            stderr_bytes: 4096,
-            head: false,
-            exclude_file: None,
-            jump_hosts_file: None,
-            jump_key: None,
-            jump_cmd: DEFAULT_JUMP_COMMAND.to_string(),
-            command: Vec::new(),
-        }
-    }
-}
-
-pub(crate) fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
-    let mut result = ExecArgs::default();
-    let mut i = 0;
-
-    while i < args.len() {
-        let arg = &args[i];
-
-        if arg == "--" {
-            result.command = args[i + 1..].to_vec();
-            break;
-        }
-
-        if let Some(val) = parse_flag_value(arg, "--timeout", "-t", args, &mut i)? {
-            result.timeout =
-                parse_duration(&val).ok_or_else(|| format!("invalid duration: {}", val))?;
-        } else if let Some(val) = parse_flag_value(arg, "--parallel", "-p", args, &mut i)? {
-            result.parallel = val
-                .parse()
-                .map_err(|_| format!("invalid parallel: {}", val))?;
-        } else if let Some(val) = parse_flag_value(arg, "--stdout_bytes", "", args, &mut i)? {
-            result.stdout_bytes = val
-                .parse()
-                .map_err(|_| format!("invalid stdout_bytes: {}", val))?;
-        } else if let Some(val) = parse_flag_value(arg, "--stderr_bytes", "", args, &mut i)? {
-            result.stderr_bytes = val
-                .parse()
-                .map_err(|_| format!("invalid stderr_bytes: {}", val))?;
-        } else if let Some(val) = parse_flag_value(arg, "--exclude", "-e", args, &mut i)? {
-            result.exclude_file = Some(val);
-        } else if let Some(val) = parse_flag_value(arg, "--jump_hosts", "-j", args, &mut i)? {
-            result.jump_hosts_file = Some(val);
-        } else if let Some(val) = parse_flag_value(arg, "--jump_key", "-k", args, &mut i)? {
-            result.jump_key = Some(val);
-        } else if let Some(val) = parse_flag_value(arg, "--jump_cmd", "", args, &mut i)? {
-            result.jump_cmd = val;
-        } else if arg == "--head" {
-            result.head = true;
-        } else {
-            result.command = args[i..].to_vec();
-            break;
-        }
-
-        i += 1;
-    }
-
-    if result.command.is_empty() {
-        return Err("exec requires a command".to_string());
-    }
-
-    Ok(result)
-}
-
-fn parse_flag_value(
-    arg: &str,
-    long: &str,
-    short: &str,
-    args: &[String],
-    i: &mut usize,
-) -> Result<Option<String>, String> {
-    if !long.is_empty() {
-        if let Some(val) = arg.strip_prefix(&format!("{}=", long)) {
-            return Ok(Some(val.to_string()));
-        }
-        if arg == long {
-            *i += 1;
-            if *i >= args.len() {
-                return Err(format!("missing value for {}", long));
-            }
-            return Ok(Some(args[*i].clone()));
-        }
-    }
-
-    if !short.is_empty() && arg == short {
-        *i += 1;
-        if *i >= args.len() {
-            return Err(format!("missing value for {}", short));
-        }
-        return Ok(Some(args[*i].clone()));
-    }
-
-    Ok(None)
 }
 
 /// Install SIGINT/SIGTERM handler that sets the given shutdown flag.
