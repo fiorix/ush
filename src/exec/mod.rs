@@ -41,6 +41,7 @@ pub struct Spec {
     pub parallel: usize,
     pub stdout_bytes: usize,
     pub stderr_bytes: usize,
+    pub head: bool,
 }
 
 impl Spec {
@@ -141,6 +142,7 @@ pub fn exec(
         let timeout = spec.timeout;
         let stdout_bytes = spec.stdout_bytes;
         let stderr_bytes = spec.stderr_bytes;
+        let head = spec.head;
 
         let handle = std::thread::spawn(move || {
             loop {
@@ -151,7 +153,7 @@ pub fn exec(
                 match target {
                     Some(target) => {
                         let result =
-                            run_cmd(&command, &args, &target, timeout, stdout_bytes, stderr_bytes);
+                            run_cmd(&command, &args, &target, timeout, stdout_bytes, stderr_bytes, head);
                         let json = result.to_json();
                         let mut w = w.lock().unwrap();
                         let _ = writeln!(w, "{}", json);
@@ -176,6 +178,7 @@ fn run_cmd(
     timeout: Duration,
     stdout_limit: usize,
     stderr_limit: usize,
+    head: bool,
 ) -> ExecResult {
     let start_time = SystemTime::now();
     let cmd_str = command.replace("{}", target);
@@ -250,8 +253,8 @@ fn run_cmd(
                     result.error = format!("exit status {}", result.exit_status);
                 }
             }
-            result.stdout = lossy_capture(&output.stdout, stdout_limit);
-            result.stderr = lossy_capture(&output.stderr, stderr_limit);
+            result.stdout = lossy_capture(&output.stdout, stdout_limit, head);
+            result.stderr = lossy_capture(&output.stderr, stderr_limit, head);
         }
         Err(e) => {
             result.error = e.to_string();
@@ -277,12 +280,15 @@ unsafe fn syscall_kill(pid: i32, sig: i32) -> i32 {
     kill(pid, sig)
 }
 
-fn lossy_capture(data: &[u8], limit: usize) -> String {
+fn lossy_capture(data: &[u8], limit: usize, head: bool) -> String {
     if data.len() <= limit {
         String::from_utf8_lossy(data).to_string()
-    } else {
+    } else if head {
         let truncated = String::from_utf8_lossy(&data[..limit]);
         format!("{}[...]", truncated)
+    } else {
+        let truncated = String::from_utf8_lossy(&data[data.len() - limit..]);
+        format!("[...]{}", truncated)
     }
 }
 
@@ -309,8 +315,9 @@ mod tests {
 
     #[test]
     fn test_lossy_capture() {
-        assert_eq!(lossy_capture(b"hello", 10), "hello");
-        assert_eq!(lossy_capture(b"hello world", 5), "hello[...]");
+        assert_eq!(lossy_capture(b"hello", 10, false), "hello");
+        assert_eq!(lossy_capture(b"hello world", 5, true), "hello[...]");
+        assert_eq!(lossy_capture(b"hello world", 5, false), "[...]world");
     }
 
     #[test]
@@ -322,6 +329,7 @@ mod tests {
             parallel: 0,
             stdout_bytes: 0,
             stderr_bytes: 0,
+            head: false,
         }
         .validate()
         .is_err());
@@ -333,6 +341,7 @@ mod tests {
             parallel: 1,
             stdout_bytes: 1,
             stderr_bytes: 1,
+            head: false,
         }
         .validate()
         .is_ok());
@@ -349,6 +358,7 @@ mod tests {
             parallel: 1,
             stdout_bytes: 5,
             stderr_bytes: 1024,
+            head: true,
         };
 
         let (tx, rx) = mpsc::channel();

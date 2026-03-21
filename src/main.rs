@@ -39,6 +39,7 @@ Flags:
   -p, --parallel <n>          number of parallel commands to execute (default: 1)
       --stdout_bytes <n>      number of bytes to read from command's stdout (default: 4096)
       --stderr_bytes <n>      number of bytes to read from command's stderr (default: 4096)
+      --head                  capture first N bytes instead of last N bytes
   -e, --exclude <file>        file containing target exclusion list
   -j, --jump_hosts <file>     file containing jump hosts
   -k, --jump_key <file>       ssh key file for jump hosts

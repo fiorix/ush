@@ -13,6 +13,7 @@ pub struct ExecArgs {
     pub parallel: usize,
     pub stdout_bytes: usize,
     pub stderr_bytes: usize,
+    pub head: bool,
     pub exclude_file: Option<String>,
     pub jump_hosts_file: Option<String>,
     pub jump_key: Option<String>,
@@ -27,6 +28,7 @@ impl Default for ExecArgs {
             parallel: 1,
             stdout_bytes: 4096,
             stderr_bytes: 4096,
+            head: false,
             exclude_file: None,
             jump_hosts_file: None,
             jump_key: None,
@@ -66,6 +68,8 @@ pub fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
             result.jump_key = Some(val);
         } else if let Some(val) = parse_flag_value(arg, "--jump_cmd", "", args, &mut i)? {
             result.jump_cmd = val;
+        } else if arg == "--head" {
+            result.head = true;
         } else {
             // First non-flag argument starts the command
             result.command = args[i..].to_vec();
@@ -132,6 +136,7 @@ pub fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
         parallel: args.parallel,
         stdout_bytes: args.stdout_bytes,
         stderr_bytes: args.stderr_bytes,
+        head: args.head,
     };
 
     let targets = exec_mod::read_targets(io::stdin(), exclude.clone());

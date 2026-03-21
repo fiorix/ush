@@ -59,6 +59,9 @@ pub fn jump_exec(
         args.push(format!("--parallel={}", parallel));
         args.push(format!("--stdout_bytes={}", spec.spec.stdout_bytes));
         args.push(format!("--stderr_bytes={}", spec.spec.stderr_bytes));
+        if spec.spec.head {
+            args.push("--head".to_string());
+        }
         args.push("--".to_string());
         args.push(spec.spec.command.clone());
         args.extend(spec.spec.args.clone());
