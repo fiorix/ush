@@ -1,13 +1,13 @@
 use std::io;
 
 use crate::freq as freq_mod;
-use crate::time::parse_go_duration;
+use crate::time::parse_duration;
 
-pub struct FreqArgs {
+pub(crate) struct FreqArgs {
     pub command: FreqCommand,
 }
 
-pub enum FreqCommand {
+pub(crate) enum FreqCommand {
     Stdout {
         json: bool,
     },
@@ -23,7 +23,7 @@ pub enum FreqCommand {
     },
 }
 
-pub fn parse_args(args: &[String]) -> Result<FreqArgs, String> {
+pub(crate) fn parse_args(args: &[String]) -> Result<FreqArgs, String> {
     if args.is_empty() {
         return Err("freq requires a subcommand: stdout, stderr, exitstatus, duration".to_string());
     }
@@ -57,7 +57,7 @@ pub fn parse_args(args: &[String]) -> Result<FreqArgs, String> {
                 .iter()
                 .find(|a| *a != "--json")
                 .ok_or_else(|| "duration requires a value argument, e.g. 5s".to_string())?;
-            let value = parse_go_duration(value_str)
+            let value = parse_duration(value_str)
                 .ok_or_else(|| format!("invalid duration: {}", value_str))?;
             Ok(FreqArgs {
                 command: FreqCommand::Duration { json, value },
@@ -71,7 +71,7 @@ fn has_json_flag(args: &[String]) -> bool {
     args.iter().any(|a| a == "--json")
 }
 
-pub fn run(args: &FreqArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run(args: &FreqArgs) -> Result<(), Box<dyn std::error::Error>> {
     let stdin = io::stdin();
 
     match &args.command {

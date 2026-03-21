@@ -5,17 +5,18 @@ use std::time::Duration;
 
 use super::{is_shutdown, Spec};
 
-pub const DEFAULT_JUMP_COMMAND: &str = "ssh -A -oBatchMode=yes -oConnectTimeout=10 -- {jump}";
+pub(crate) const DEFAULT_JUMP_COMMAND: &str =
+    "ssh -A -oBatchMode=yes -oConnectTimeout=10 -- {jump}";
 
-pub struct JumpSpec {
-    pub spec: Spec,
-    pub jump_hosts_key_file: String,
-    pub jump_command: String,
-    pub jump_hosts: Vec<String>,
+pub(crate) struct JumpSpec {
+    pub(crate) spec: Spec,
+    pub(crate) jump_hosts_key_file: String,
+    pub(crate) jump_command: String,
+    pub(crate) jump_hosts: Vec<String>,
 }
 
 impl JumpSpec {
-    pub fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn validate(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.spec.validate()?;
         if self.jump_command.is_empty() {
             return Err("jump command not set".into());
@@ -37,7 +38,7 @@ impl JumpSpec {
 }
 
 /// Executes commands via jump hosts with ssh-agent per host.
-pub fn jump_exec(
+pub(crate) fn jump_exec(
     w: Arc<Mutex<Box<dyn Write + Send>>>,
     spec: &JumpSpec,
     input: mpsc::Receiver<String>,
@@ -85,7 +86,7 @@ pub fn jump_exec(
         args.push("exec".to_string());
         args.push(format!(
             "--timeout={}",
-            crate::time::format_go_duration(spec.spec.timeout)
+            crate::time::format_duration(spec.spec.timeout)
         ));
         args.push(format!("--parallel={}", parallel));
         args.push(format!("--stdout_bytes={}", spec.spec.stdout_bytes));

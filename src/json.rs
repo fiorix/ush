@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-/// Escapes a string for JSON output (matching Go's encoding/json).
-pub fn escape_json_string(s: &str) -> String {
+/// Escapes a string for JSON output.
+pub(crate) fn escape_json_string(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 2);
     result.push('"');
     for c in s.chars() {
@@ -145,7 +145,7 @@ fn parse_json_string(s: &str) -> Option<(String, &str)> {
 
 /// A simple JSON value type for parsing exec results.
 #[derive(Debug, Clone)]
-pub enum JsonValue {
+pub(crate) enum JsonValue {
     String(String),
     Number(f64),
     #[allow(dead_code)]
@@ -155,14 +155,14 @@ pub enum JsonValue {
 }
 
 impl JsonValue {
-    pub fn as_str(&self) -> Option<&str> {
+    pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
             JsonValue::String(s) => Some(s),
             _ => None,
         }
     }
 
-    pub fn as_i32(&self) -> Option<i32> {
+    pub(crate) fn as_i32(&self) -> Option<i32> {
         match self {
             JsonValue::Number(n) => Some(*n as i32),
             _ => None,
@@ -170,7 +170,7 @@ impl JsonValue {
     }
 
     #[allow(dead_code)]
-    pub fn as_f64(&self) -> Option<f64> {
+    pub(crate) fn as_f64(&self) -> Option<f64> {
         match self {
             JsonValue::Number(n) => Some(*n),
             _ => None,
@@ -179,7 +179,7 @@ impl JsonValue {
 }
 
 /// Parse a JSON value from a string, returning the value and remaining string.
-pub fn parse_json_value(s: &str) -> Option<(JsonValue, &str)> {
+pub(crate) fn parse_json_value(s: &str) -> Option<(JsonValue, &str)> {
     let s = s.trim_start();
     if s.is_empty() {
         return None;
@@ -273,7 +273,7 @@ fn parse_json_array(s: &str) -> Option<(JsonValue, &str)> {
 }
 
 /// Parse exec result fields from a JSON object.
-pub fn parse_exec_result(obj: &JsonValue) -> Option<HashMap<String, JsonValue>> {
+pub(crate) fn parse_exec_result(obj: &JsonValue) -> Option<HashMap<String, JsonValue>> {
     match obj {
         JsonValue::Object(fields) => {
             let mut map = HashMap::new();

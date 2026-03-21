@@ -6,19 +6,19 @@ use std::time::Duration;
 use crate::exec::jumpexec::{self, JumpSpec, DEFAULT_JUMP_COMMAND};
 use crate::exec::{self as exec_mod, Spec};
 use crate::strutil::StringSet;
-use crate::time::parse_go_duration;
+use crate::time::parse_duration;
 
-pub struct ExecArgs {
-    pub timeout: Duration,
-    pub parallel: usize,
-    pub stdout_bytes: usize,
-    pub stderr_bytes: usize,
-    pub head: bool,
-    pub exclude_file: Option<String>,
-    pub jump_hosts_file: Option<String>,
-    pub jump_key: Option<String>,
-    pub jump_cmd: String,
-    pub command: Vec<String>,
+pub(crate) struct ExecArgs {
+    pub(crate) timeout: Duration,
+    pub(crate) parallel: usize,
+    pub(crate) stdout_bytes: usize,
+    pub(crate) stderr_bytes: usize,
+    pub(crate) head: bool,
+    pub(crate) exclude_file: Option<String>,
+    pub(crate) jump_hosts_file: Option<String>,
+    pub(crate) jump_key: Option<String>,
+    pub(crate) jump_cmd: String,
+    pub(crate) command: Vec<String>,
 }
 
 impl Default for ExecArgs {
@@ -38,7 +38,7 @@ impl Default for ExecArgs {
     }
 }
 
-pub fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
+pub(crate) fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
     let mut result = ExecArgs::default();
     let mut i = 0;
 
@@ -53,7 +53,7 @@ pub fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
 
         if let Some(val) = parse_flag_value(arg, "--timeout", "-t", args, &mut i)? {
             result.timeout =
-                parse_go_duration(&val).ok_or_else(|| format!("invalid duration: {}", val))?;
+                parse_duration(&val).ok_or_else(|| format!("invalid duration: {}", val))?;
         } else if let Some(val) = parse_flag_value(arg, "--parallel", "-p", args, &mut i)? {
             result.parallel = val
                 .parse()
@@ -126,7 +126,7 @@ fn parse_flag_value(
     Ok(None)
 }
 
-pub fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
     exec_mod::install_signal_handler();
 
     let exclude = args

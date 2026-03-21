@@ -1,4 +1,4 @@
-pub mod jumpexec;
+pub(crate) mod jumpexec;
 
 use std::io::{self, BufRead, Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -9,17 +9,17 @@ use std::time::{Duration, SystemTime};
 
 use crate::json::escape_json_string;
 use crate::strutil::StringSet;
-use crate::time::{format_go_duration, format_rfc3339_nano};
+use crate::time::{format_duration, format_rfc3339_nano};
 
 /// Global shutdown flag set by signal handler.
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
-pub fn is_shutdown() -> bool {
+pub(crate) fn is_shutdown() -> bool {
     SHUTDOWN.load(Ordering::Relaxed)
 }
 
 /// Install SIGINT/SIGTERM handler that sets the shutdown flag.
-pub fn install_signal_handler() {
+pub(crate) fn install_signal_handler() {
     unsafe {
         extern "C" {
             fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
@@ -34,7 +34,7 @@ pub fn install_signal_handler() {
 }
 
 #[derive(Debug)]
-pub enum SpecError {
+pub(crate) enum SpecError {
     MissingCommand,
     ZeroTimeout,
     ZeroParallel,
@@ -56,18 +56,18 @@ impl std::fmt::Display for SpecError {
 
 impl std::error::Error for SpecError {}
 
-pub struct Spec {
-    pub command: String,
-    pub args: Vec<String>,
-    pub timeout: Duration,
-    pub parallel: usize,
-    pub stdout_bytes: usize,
-    pub stderr_bytes: usize,
-    pub head: bool,
+pub(crate) struct Spec {
+    pub(crate) command: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) timeout: Duration,
+    pub(crate) parallel: usize,
+    pub(crate) stdout_bytes: usize,
+    pub(crate) stderr_bytes: usize,
+    pub(crate) head: bool,
 }
 
 impl Spec {
-    pub fn validate(&self) -> Result<(), SpecError> {
+    pub(crate) fn validate(&self) -> Result<(), SpecError> {
         if self.command.is_empty() {
             return Err(SpecError::MissingCommand);
         }
@@ -87,19 +87,19 @@ impl Spec {
     }
 }
 
-pub struct ExecResult {
-    pub target: String,
-    pub duration: String,
-    pub start_time: SystemTime,
-    pub end_time: SystemTime,
-    pub exit_status: i32,
-    pub stdout: String,
-    pub stderr: String,
-    pub error: String,
+struct ExecResult {
+    target: String,
+    duration: String,
+    start_time: SystemTime,
+    end_time: SystemTime,
+    exit_status: i32,
+    stdout: String,
+    stderr: String,
+    error: String,
 }
 
 impl ExecResult {
-    pub fn to_json(&self) -> String {
+    fn to_json(&self) -> String {
         format!(
             "{{\"target\":{},\"duration\":{},\"start_time\":{},\"end_time\":{},\"exit_status\":{},\"stdout\":{},\"stderr\":{},\"error\":{}}}",
             escape_json_string(&self.target),
@@ -116,7 +116,7 @@ impl ExecResult {
 
 /// Reads targets from stdin, skipping empty lines, comments, and excluded targets.
 /// Uses a bounded channel to avoid unbounded memory growth with large target lists.
-pub fn read_targets(
+pub(crate) fn read_targets(
     reader: impl io::Read + Send + 'static,
     exclude: Option<StringSet>,
 ) -> mpsc::Receiver<String> {
@@ -152,7 +152,7 @@ pub fn read_targets(
 }
 
 /// Executes commands in parallel, writing JSON results to writer.
-pub fn exec(
+pub(crate) fn exec(
     w: Arc<Mutex<Box<dyn Write + Send>>>,
     spec: &Spec,
     input: mpsc::Receiver<String>,
@@ -165,7 +165,7 @@ pub fn exec(
     vlog!(
         "[verbose] exec: starting {} worker(s), timeout={}, command={}",
         spec.parallel,
-        format_go_duration(spec.timeout),
+        format_duration(spec.timeout),
         spec.command
     );
 
@@ -264,7 +264,7 @@ fn run_cmd(
             vlog!("[verbose] run_cmd: failed to spawn {}: {}", cmd_str, e);
             result.error = e.to_string();
             result.end_time = SystemTime::now();
-            result.duration = format_go_duration(
+            result.duration = format_duration(
                 result
                     .end_time
                     .duration_since(result.start_time)
@@ -385,7 +385,7 @@ fn run_cmd(
     }
 
     result.end_time = SystemTime::now();
-    result.duration = format_go_duration(
+    result.duration = format_duration(
         result
             .end_time
             .duration_since(result.start_time)

@@ -1,2 +1,2 @@
-pub mod exec;
-pub mod freq;
+pub(crate) mod exec;
+pub(crate) mod freq;

@@ -3,13 +3,13 @@ use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
 use crate::json::{self, JsonValue};
-use crate::time::{format_go_duration, parse_go_duration};
+use crate::time::{format_duration, parse_duration};
 
 #[derive(Debug, Clone)]
-pub struct Item {
-    pub freq: f64,
-    pub value: String,
-    pub targets: Vec<String>,
+pub(crate) struct Item {
+    pub(crate) freq: f64,
+    pub(crate) value: String,
+    pub(crate) targets: Vec<String>,
 }
 
 fn to_fixed(num: f64, precision: u32) -> f64 {
@@ -71,7 +71,7 @@ fn read_results<F: Fn(&HashMap<String, JsonValue>) -> String>(
     Ok(items)
 }
 
-pub fn duration(
+pub(crate) fn duration(
     reader: impl io::Read,
     truncate: Duration,
 ) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
@@ -82,26 +82,26 @@ pub fn duration(
                 .get("duration")
                 .and_then(|v| v.as_str())
                 .unwrap_or("0s");
-            let d = parse_go_duration(dur_str).unwrap_or_default();
+            let d = parse_duration(dur_str).unwrap_or_default();
             let truncate_nanos = truncate.as_nanos();
             if truncate_nanos == 0 {
-                return format_go_duration(d);
+                return format_duration(d);
             }
             let d_nanos = d.as_nanos();
             let truncated = (d_nanos / truncate_nanos) * truncate_nanos + truncate_nanos;
-            format_go_duration(Duration::from_nanos(truncated as u64))
+            format_duration(Duration::from_nanos(truncated as u64))
         },
         |items| {
             items.sort_by(|a, b| {
-                let da = parse_go_duration(&a.value).unwrap_or_default();
-                let db = parse_go_duration(&b.value).unwrap_or_default();
+                let da = parse_duration(&a.value).unwrap_or_default();
+                let db = parse_duration(&b.value).unwrap_or_default();
                 da.cmp(&db)
             });
         },
     )
 }
 
-pub fn exit_status(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
+pub(crate) fn exit_status(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     read_results(
         reader,
         |fields| {
@@ -121,7 +121,7 @@ pub fn exit_status(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::erro
     )
 }
 
-pub fn stdout(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
+pub(crate) fn stdout(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     read_results(
         reader,
         |fields| {
@@ -135,7 +135,7 @@ pub fn stdout(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Er
     )
 }
 
-pub fn stderr(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
+pub(crate) fn stderr(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     read_results(
         reader,
         |fields| {
@@ -149,7 +149,7 @@ pub fn stderr(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Er
     )
 }
 
-pub fn encode_json(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
+pub(crate) fn encode_json(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
     for item in items {
         write!(
             w,
@@ -168,8 +168,7 @@ pub fn encode_json(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
     Ok(())
 }
 
-/// Format frequency value to match Go's JSON encoding:
-/// integers as "100", floats as "33.33"
+/// Format frequency: integers as "100", floats as "33.33".
 fn format_freq(f: f64) -> String {
     if f == f.trunc() {
         // Integer value — Go encodes 100.0 as 100 in JSON
@@ -179,7 +178,7 @@ fn format_freq(f: f64) -> String {
     }
 }
 
-pub fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
+pub(crate) fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
     writeln!(w, "{:<8} {:<8} {:<8} value", "count", "targets", "freq %")?;
     for (i, item) in items.iter().enumerate() {
         let mut v = item.value.clone();
@@ -187,7 +186,7 @@ pub fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
             v.truncate(50);
             v.push_str("[...]");
         }
-        let quoted = go_quote(&v);
+        let quoted = shell_quote(&v);
         writeln!(
             w,
             "{:<8} {:<8} {:<6.2}   {}",
@@ -200,8 +199,8 @@ pub fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
     Ok(())
 }
 
-/// Mimics Go's %q formatting — quotes and escapes special characters.
-fn go_quote(s: &str) -> String {
+/// Quotes and escapes a string for display, similar to shell quoting.
+fn shell_quote(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 2);
     result.push('"');
     for c in s.chars() {
