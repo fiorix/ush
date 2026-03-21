@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn test_new_string_set_from_file() {
         let dir = std::env::temp_dir();
-        let path = dir.join("rush-strutil-test");
+        let path = dir.join("ush-strutil-test");
         {
             let mut f = File::create(&path).unwrap();
             write!(f, "hello\nworld").unwrap();

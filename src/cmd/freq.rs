@@ -8,10 +8,19 @@ pub struct FreqArgs {
 }
 
 pub enum FreqCommand {
-    Stdout { json: bool },
-    Stderr { json: bool },
-    Exitstatus { json: bool },
-    Duration { json: bool, value: std::time::Duration },
+    Stdout {
+        json: bool,
+    },
+    Stderr {
+        json: bool,
+    },
+    Exitstatus {
+        json: bool,
+    },
+    Duration {
+        json: bool,
+        value: std::time::Duration,
+    },
 }
 
 pub fn parse_args(args: &[String]) -> Result<FreqArgs, String> {
@@ -25,25 +34,34 @@ pub fn parse_args(args: &[String]) -> Result<FreqArgs, String> {
     match subcmd.as_str() {
         "stdout" => {
             let json = has_json_flag(sub_args);
-            Ok(FreqArgs { command: FreqCommand::Stdout { json } })
+            Ok(FreqArgs {
+                command: FreqCommand::Stdout { json },
+            })
         }
         "stderr" => {
             let json = has_json_flag(sub_args);
-            Ok(FreqArgs { command: FreqCommand::Stderr { json } })
+            Ok(FreqArgs {
+                command: FreqCommand::Stderr { json },
+            })
         }
         "exitstatus" => {
             let json = has_json_flag(sub_args);
-            Ok(FreqArgs { command: FreqCommand::Exitstatus { json } })
+            Ok(FreqArgs {
+                command: FreqCommand::Exitstatus { json },
+            })
         }
         "duration" => {
             let json = has_json_flag(sub_args);
             // Find the non-flag argument (the duration value)
-            let value_str = sub_args.iter()
+            let value_str = sub_args
+                .iter()
                 .find(|a| *a != "--json")
                 .ok_or_else(|| "duration requires a value argument, e.g. 5s".to_string())?;
             let value = parse_go_duration(value_str)
                 .ok_or_else(|| format!("invalid duration: {}", value_str))?;
-            Ok(FreqArgs { command: FreqCommand::Duration { json, value } })
+            Ok(FreqArgs {
+                command: FreqCommand::Duration { json, value },
+            })
         }
         _ => Err(format!("unknown freq subcommand: {}", subcmd)),
     }

@@ -48,11 +48,19 @@ pub fn jump_exec(
     let input = Arc::new(Mutex::new(input));
     let mut handles = Vec::new();
 
-    vlog!("[verbose] jump_exec: {} host(s), {} parallel per host", spec.jump_hosts.len(), parallel);
+    vlog!(
+        "[verbose] jump_exec: {} host(s), {} parallel per host",
+        spec.jump_hosts.len(),
+        parallel
+    );
 
     for host in &spec.jump_hosts {
         let (mut agent_cmd, authsock) = ssh_agent(host)?;
-        vlog!("[verbose] jump_exec: ssh-agent started for {}, sock={}", host, authsock);
+        vlog!(
+            "[verbose] jump_exec: ssh-agent started for {}, sock={}",
+            host,
+            authsock
+        );
 
         if !spec.jump_hosts_key_file.is_empty() {
             ssh_add_key(host, &authsock, &spec.jump_hosts_key_file)?;
@@ -75,7 +83,10 @@ pub fn jump_exec(
         // Append the remote ush command after the SSH args
         args.push("ush".to_string());
         args.push("exec".to_string());
-        args.push(format!("--timeout={}", crate::time::format_go_duration(spec.spec.timeout)));
+        args.push(format!(
+            "--timeout={}",
+            crate::time::format_go_duration(spec.spec.timeout)
+        ));
         args.push(format!("--parallel={}", parallel));
         args.push(format!("--stdout_bytes={}", spec.spec.stdout_bytes));
         args.push(format!("--stderr_bytes={}", spec.spec.stderr_bytes));
@@ -86,7 +97,12 @@ pub fn jump_exec(
         args.push(spec.spec.command.clone());
         args.extend(spec.spec.args.clone());
 
-        vlog!("[verbose] jump_exec: spawning {} {:?} for host {}", ssh_cmd, args, host);
+        vlog!(
+            "[verbose] jump_exec: spawning {} {:?} for host {}",
+            ssh_cmd,
+            args,
+            host
+        );
 
         let mut child = Command::new(&ssh_cmd)
             .args(&args)
@@ -165,7 +181,10 @@ pub fn jump_exec(
             let _ = stdout_handle.join();
             let _ = stderr_handle.join();
             let _ = child.wait();
-            vlog!("[verbose] jump_exec: SSH to {} finished, killing ssh-agent", host_name);
+            vlog!(
+                "[verbose] jump_exec: SSH to {} finished, killing ssh-agent",
+                host_name
+            );
             let _ = agent_cmd.kill();
             let _ = agent_cmd.wait();
         }));
@@ -194,7 +213,11 @@ fn ssh_agent(jumphost: &str) -> Result<(Child, String), Box<dyn std::error::Erro
     let parts: Vec<&str> = first_line.splitn(2, '=').collect();
     if parts.len() != 2 {
         let _ = cmd.kill();
-        return Err(format!("{}: unexpected output from ssh-agent: {:?}", jumphost, first_line).into());
+        return Err(format!(
+            "{}: unexpected output from ssh-agent: {:?}",
+            jumphost, first_line
+        )
+        .into());
     }
 
     let sock = parts[1].split(';').next().unwrap_or("").to_string();
@@ -210,18 +233,30 @@ fn ssh_agent(jumphost: &str) -> Result<(Child, String), Box<dyn std::error::Erro
             found = true;
             break;
         }
-        vlog!("[verbose] ssh_agent: waiting for socket {} (attempt {})", sock, attempt + 1);
+        vlog!(
+            "[verbose] ssh_agent: waiting for socket {} (attempt {})",
+            sock,
+            attempt + 1
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
     if !found {
         let _ = cmd.kill();
-        return Err(format!("{}: ssh-agent socket not found after 2s: {}", jumphost, sock).into());
+        return Err(format!(
+            "{}: ssh-agent socket not found after 2s: {}",
+            jumphost, sock
+        )
+        .into());
     }
 
     Ok((cmd, sock))
 }
 
-fn ssh_add_key(jumphost: &str, authsock: &str, keyfile: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn ssh_add_key(
+    jumphost: &str,
+    authsock: &str,
+    keyfile: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new("ssh-add")
         .arg(keyfile)
         .env_clear()

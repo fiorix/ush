@@ -50,7 +50,7 @@ fn read_results<F: Fn(&HashMap<String, JsonValue>) -> String>(
             .unwrap_or("")
             .to_string();
 
-        m.entry(key).or_insert_with(Vec::new).push(target);
+        m.entry(key).or_default().push(target);
     }
 
     if m.is_empty() {
@@ -151,7 +151,9 @@ pub fn stderr(reader: impl io::Read) -> Result<Vec<Item>, Box<dyn std::error::Er
 
 pub fn encode_json(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
     for item in items {
-        write!(w, "{{\"freq\":{},\"value\":{},\"targets\":[",
+        write!(
+            w,
+            "{{\"freq\":{},\"value\":{},\"targets\":[",
             format_freq(item.freq),
             json::escape_json_string(&item.value),
         )?;
@@ -178,11 +180,7 @@ fn format_freq(f: f64) -> String {
 }
 
 pub fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
-    write!(
-        w,
-        "{:<8} {:<8} {:<8} {}\n",
-        "count", "targets", "freq %", "value"
-    )?;
+    writeln!(w, "{:<8} {:<8} {:<8} value", "count", "targets", "freq %")?;
     for (i, item) in items.iter().enumerate() {
         let mut v = item.value.clone();
         if v.len() > 50 {
@@ -190,9 +188,9 @@ pub fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
             v.push_str("[...]");
         }
         let quoted = go_quote(&v);
-        write!(
+        writeln!(
             w,
-            "{:<8} {:<8} {:<6.2}   {}\n",
+            "{:<8} {:<8} {:<6.2}   {}",
             i + 1,
             item.targets.len(),
             item.freq,
@@ -234,7 +232,13 @@ fn go_quote(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn make_result_json(target: &str, duration: &str, exit_status: i32, stdout: &str, stderr: &str) -> String {
+    fn make_result_json(
+        target: &str,
+        duration: &str,
+        exit_status: i32,
+        stdout: &str,
+        stderr: &str,
+    ) -> String {
         format!(
             "{{\"target\":{},\"duration\":{},\"start_time\":\"2024-01-01T00:00:00Z\",\"end_time\":\"2024-01-01T00:00:00Z\",\"exit_status\":{},\"stdout\":{},\"stderr\":{},\"error\":\"\"}}",
             json::escape_json_string(target),

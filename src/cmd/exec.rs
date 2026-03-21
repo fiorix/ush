@@ -3,8 +3,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::exec::{self as exec_mod, Spec};
 use crate::exec::jumpexec::{self, JumpSpec, DEFAULT_JUMP_COMMAND};
+use crate::exec::{self as exec_mod, Spec};
 use crate::strutil::StringSet;
 use crate::time::parse_go_duration;
 
@@ -52,14 +52,20 @@ pub fn parse_args(args: &[String]) -> Result<ExecArgs, String> {
         }
 
         if let Some(val) = parse_flag_value(arg, "--timeout", "-t", args, &mut i)? {
-            result.timeout = parse_go_duration(&val)
-                .ok_or_else(|| format!("invalid duration: {}", val))?;
+            result.timeout =
+                parse_go_duration(&val).ok_or_else(|| format!("invalid duration: {}", val))?;
         } else if let Some(val) = parse_flag_value(arg, "--parallel", "-p", args, &mut i)? {
-            result.parallel = val.parse().map_err(|_| format!("invalid parallel: {}", val))?;
+            result.parallel = val
+                .parse()
+                .map_err(|_| format!("invalid parallel: {}", val))?;
         } else if let Some(val) = parse_flag_value(arg, "--stdout_bytes", "", args, &mut i)? {
-            result.stdout_bytes = val.parse().map_err(|_| format!("invalid stdout_bytes: {}", val))?;
+            result.stdout_bytes = val
+                .parse()
+                .map_err(|_| format!("invalid stdout_bytes: {}", val))?;
         } else if let Some(val) = parse_flag_value(arg, "--stderr_bytes", "", args, &mut i)? {
-            result.stderr_bytes = val.parse().map_err(|_| format!("invalid stderr_bytes: {}", val))?;
+            result.stderr_bytes = val
+                .parse()
+                .map_err(|_| format!("invalid stderr_bytes: {}", val))?;
         } else if let Some(val) = parse_flag_value(arg, "--exclude", "-e", args, &mut i)? {
             result.exclude_file = Some(val);
         } else if let Some(val) = parse_flag_value(arg, "--jump_hosts", "-j", args, &mut i)? {
@@ -123,10 +129,11 @@ fn parse_flag_value(
 pub fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
     exec_mod::install_signal_handler();
 
-    let exclude = match &args.exclude_file {
-        Some(f) => Some(StringSet::from_file(Path::new(f))?),
-        None => None,
-    };
+    let exclude = args
+        .exclude_file
+        .as_deref()
+        .map(|f| StringSet::from_file(Path::new(f)))
+        .transpose()?;
 
     let command = args.command[0].clone();
     let cmd_args: Vec<String> = args.command[1..].to_vec();
@@ -143,8 +150,7 @@ pub fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     let targets = exec_mod::read_targets(io::stdin(), exclude.clone());
 
-    let w: Arc<Mutex<Box<dyn io::Write + Send>>> =
-        Arc::new(Mutex::new(Box::new(io::stdout())));
+    let w: Arc<Mutex<Box<dyn io::Write + Send>>> = Arc::new(Mutex::new(Box::new(io::stdout())));
 
     if let Some(ref jump_hosts_file) = args.jump_hosts_file {
         let mut hosts = StringSet::from_file(Path::new(jump_hosts_file))?;

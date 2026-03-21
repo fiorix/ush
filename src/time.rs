@@ -199,7 +199,11 @@ pub fn parse_rfc3339(s: &str) -> Option<SystemTime> {
 
 #[allow(dead_code)]
 fn date_to_days(year: i32, month: u32, day: u32) -> i64 {
-    let y = if month <= 2 { year as i64 - 1 } else { year as i64 };
+    let y = if month <= 2 {
+        year as i64 - 1
+    } else {
+        year as i64
+    };
     let m = if month <= 2 { month + 9 } else { month - 3 };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u32;

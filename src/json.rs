@@ -1,4 +1,4 @@
-//! Minimal JSON serialization/deserialization for the specific types used in rush.
+//! Minimal JSON serialization/deserialization for the specific types used in ush.
 
 use std::collections::HashMap;
 
@@ -90,29 +90,43 @@ fn parse_json_string(s: &str) -> Option<(String, &str)> {
                         if let Ok(cp) = u32::from_str_radix(&hex, 16) {
                             // Handle UTF-16 surrogate pairs
                             if (0xD800..=0xDBFF).contains(&cp) {
-                                // High surrogate — expect \uDCxx low surrogate
-                                if chars.next() == Some('\\') && chars.next() == Some('u') {
-                                    byte_count += 2;
+                                // High surrogate — peek for \uDCxx low surrogate.
+                                // Clone the iterator to avoid consuming chars on mismatch.
+                                let mut peek = chars.clone();
+                                let is_surrogate_pair =
+                                    peek.next() == Some('\\') && peek.next() == Some('u');
+                                if is_surrogate_pair {
+                                    let mut peek_bytes: usize = 2; // for \ and u
                                     let mut hex2 = String::new();
+                                    let mut valid = true;
                                     for _ in 0..4 {
-                                        match chars.next() {
+                                        match peek.next() {
                                             Some(c) => {
                                                 hex2.push(c);
-                                                byte_count += c.len_utf8();
+                                                peek_bytes += c.len_utf8();
                                             }
-                                            None => return None,
+                                            None => {
+                                                valid = false;
+                                                break;
+                                            }
                                         }
                                     }
-                                    if let Ok(low) = u32::from_str_radix(&hex2, 16) {
-                                        if (0xDC00..=0xDFFF).contains(&low) {
-                                            let combined = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-                                            if let Some(c) = char::from_u32(combined) {
-                                                result.push(c);
+                                    if valid {
+                                        if let Ok(low) = u32::from_str_radix(&hex2, 16) {
+                                            if (0xDC00..=0xDFFF).contains(&low) {
+                                                let combined = 0x10000
+                                                    + ((cp - 0xD800) << 10)
+                                                    + (low - 0xDC00);
+                                                if let Some(c) = char::from_u32(combined) {
+                                                    result.push(c);
+                                                    byte_count += peek_bytes;
+                                                    chars = peek;
+                                                }
                                             }
                                         }
                                     }
                                 }
-                                // If low surrogate doesn't follow, skip the high surrogate
+                                // If low surrogate doesn't follow, silently drop the lone surrogate
                             } else if let Some(c) = char::from_u32(cp) {
                                 result.push(c);
                             }
@@ -179,8 +193,8 @@ pub fn parse_json_value(s: &str) -> Option<(JsonValue, &str)> {
         b'{' => parse_json_object(s),
         b'[' => parse_json_array(s),
         b'n' => {
-            if s.starts_with("null") {
-                Some((JsonValue::Null, &s[4..]))
+            if let Some(rest) = s.strip_prefix("null") {
+                Some((JsonValue::Null, rest))
             } else {
                 None
             }
@@ -210,15 +224,15 @@ fn parse_json_object(s: &str) -> Option<(JsonValue, &str)> {
 
     loop {
         s = s.trim_start();
-        if s.starts_with('}') {
-            return Some((JsonValue::Object(fields), &s[1..]));
+        if let Some(rest) = s.strip_prefix('}') {
+            return Some((JsonValue::Object(fields), rest));
         }
         if !fields.is_empty() {
-            if !s.starts_with(',') {
+            if let Some(rest) = s.strip_prefix(',') {
+                s = rest.trim_start();
+            } else {
                 return None;
             }
-            s = &s[1..];
-            s = s.trim_start();
         }
         let (key, rest) = parse_json_string(s)?;
         s = rest.trim_start();
@@ -242,14 +256,15 @@ fn parse_json_array(s: &str) -> Option<(JsonValue, &str)> {
 
     loop {
         s = s.trim_start();
-        if s.starts_with(']') {
-            return Some((JsonValue::Array(items), &s[1..]));
+        if let Some(rest) = s.strip_prefix(']') {
+            return Some((JsonValue::Array(items), rest));
         }
         if !items.is_empty() {
-            if !s.starts_with(',') {
+            if let Some(rest) = s.strip_prefix(',') {
+                s = rest;
+            } else {
                 return None;
             }
-            s = &s[1..];
         }
         let (value, rest) = parse_json_value(s)?;
         s = rest;
