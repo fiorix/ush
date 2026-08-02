@@ -10,6 +10,24 @@ use super::{ExecResult, Spec};
 
 pub const DEFAULT_JUMP_COMMAND: &str = "ssh -A -oBatchMode=yes -oConnectTimeout=10 -- {jump}";
 
+/// Ensures the ssh-agent child is killed and reaped if jump setup fails before the host thread runs.
+struct AgentGuard(Option<Child>);
+
+impl AgentGuard {
+    fn kill_and_wait(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for AgentGuard {
+    fn drop(&mut self) {
+        self.kill_and_wait();
+    }
+}
+
 pub struct JumpSpec {
     pub spec: Spec,
     pub jump_hosts_key_file: String,
@@ -57,7 +75,7 @@ pub fn jump_exec(
     );
 
     for host in &spec.jump_hosts {
-        let (mut agent_cmd, authsock) = ssh_agent(host)?;
+        let (mut agent_guard, authsock) = ssh_agent(host)?;
         vlog!(
             "[verbose] jump_exec: ssh-agent started for {}, sock={}",
             host,
@@ -65,7 +83,6 @@ pub fn jump_exec(
         );
 
         if !spec.jump_hosts_key_file.is_empty() {
-            // If ssh-add fails, agent_cmd is dropped without killing it and the ssh-agent process is leaked.
             ssh_add_key(host, &authsock, &spec.jump_hosts_key_file)?;
             vlog!("[verbose] jump_exec: key loaded for {}", host);
         }
@@ -192,8 +209,7 @@ pub fn jump_exec(
                 "[verbose] jump_exec: SSH to {} finished, killing ssh-agent",
                 host_name
             );
-            let _ = agent_cmd.kill();
-            let _ = agent_cmd.wait();
+            agent_guard.kill_and_wait();
         }));
     }
 
@@ -207,7 +223,7 @@ pub fn jump_exec(
     Ok(())
 }
 
-fn ssh_agent(jumphost: &str) -> Result<(Child, String), Box<dyn std::error::Error>> {
+fn ssh_agent(jumphost: &str) -> Result<(AgentGuard, String), Box<dyn std::error::Error>> {
     let mut cmd = Command::new("ssh-agent")
         .args(["-D", "-s"])
         .stdout(Stdio::piped())
@@ -258,7 +274,7 @@ fn ssh_agent(jumphost: &str) -> Result<(Child, String), Box<dyn std::error::Erro
         .into());
     }
 
-    Ok((cmd, sock))
+    Ok((AgentGuard(Some(cmd)), sock))
 }
 
 fn ssh_add_key(

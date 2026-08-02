@@ -1,7 +1,7 @@
 use std::io;
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,23 +60,23 @@ pub(crate) struct ExecArgs {
 /// Install SIGINT/SIGTERM handler that sets the given shutdown flag.
 /// Workers check the flag before starting a new target. A target that is already running is allowed to finish (or time out).
 fn install_signal_handler(shutdown: &Arc<AtomicBool>) {
-    // Store a raw pointer to the AtomicBool for the signal handler.
-    // The AtomicBool lives in an Arc that outlives the process, but concurrent signal delivery is not synchronized here. This is a pragmatic simplification rather than a sound guarantee.
-    static mut SHUTDOWN_PTR: *const AtomicBool = std::ptr::null();
+    // Store the AtomicBool pointer in an AtomicPtr so signal delivery is synchronized with the store.
+    static SHUTDOWN_PTR: AtomicPtr<AtomicBool> = AtomicPtr::new(std::ptr::null_mut());
 
-    unsafe {
-        SHUTDOWN_PTR = Arc::as_ptr(shutdown);
+    SHUTDOWN_PTR.store(Arc::as_ptr(shutdown) as *mut _, Ordering::Release);
 
-        extern "C" {
-            fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
-        }
-        extern "C" fn handler(_sig: i32) {
+    extern "C" {
+        fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
+    }
+    extern "C" fn handler(_sig: i32) {
+        let ptr = SHUTDOWN_PTR.load(Ordering::Acquire);
+        if !ptr.is_null() {
             unsafe {
-                if !SHUTDOWN_PTR.is_null() {
-                    (*SHUTDOWN_PTR).store(true, Ordering::Relaxed);
-                }
+                (*ptr).store(true, Ordering::Relaxed);
             }
         }
+    }
+    unsafe {
         signal(2, handler); // SIGINT
         signal(15, handler); // SIGTERM
     }
