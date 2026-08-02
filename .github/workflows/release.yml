@@ -50,7 +50,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Zig
-        uses: mlugg/setup-zig@v1
+        run: |
+          ZIG_VERSION=0.13.0
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" | tar -xJ
+          sudo mv "zig-linux-x86_64-${ZIG_VERSION}/zig" /usr/local/bin/zig
+          zig version
 
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild
