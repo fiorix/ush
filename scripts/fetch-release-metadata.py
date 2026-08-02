@@ -10,6 +10,7 @@ OUT_DIR defaults to site/static/dl/cli.
 import json
 import pathlib
 import sys
+import urllib.error
 import urllib.request
 
 REPO = "fiorix/ush"
@@ -40,8 +41,18 @@ def fetch_text(url: str) -> str:
 def main() -> int:
     out_dir = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("site/static/dl/cli")
     out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "latest.json"
 
-    release = fetch_json(f"https://api.github.com/repos/{REPO}/releases/latest")
+    try:
+        release = fetch_json(f"https://api.github.com/repos/{REPO}/releases/latest")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print("no GitHub releases found; writing empty metadata", file=sys.stderr)
+            out_path.write_text(json.dumps({"version": "", "tag": "", "url": "", "assets": []}, indent=2) + "\n")
+            print(f"wrote {out_path}")
+            return 0
+        raise
+
     tag = release["tag_name"]
     version = tag.lstrip("v")
 
@@ -75,7 +86,6 @@ def main() -> int:
         "assets": assets,
     }
 
-    out_path = out_dir / "latest.json"
     out_path.write_text(json.dumps(metadata, indent=2) + "\n")
     print(f"wrote {out_path}")
     return 0
