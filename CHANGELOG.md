@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.0
+
+- Streaming output by default: `stdout_chunk`, `stderr_chunk`, and `done` frames.
+- Add `--format {json|msgpack}`, `--chunk-size`, and `--batch` flags.
+- MessagePack wire format for jump-host links.
+- Add `ush dump-skill` for agent usage documentation.
+
 ## 1.2.0
 
 - Rewrite in Rust. The Go implementation and its modules were replaced by a library crate plus binary using clap, serde, and crossbeam-channel.
