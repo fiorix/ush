@@ -10,6 +10,18 @@ Run a command for each target:
 echo -ne 'hello\nworld\n' | ush exec -- echo {}
 ```
 
+Use files in the current directory as targets:
+
+```sh
+# Count lines in every regular file.
+find . -maxdepth 1 -type f | ush exec -- wc -l {}
+```
+
+```
+# Group files by detected type.
+find . -maxdepth 1 -type f | ush exec -- file --brief {} | ush freq stdout
+```
+
 Run via ssh over a list of hosts:
 
 ```sh
