@@ -17,7 +17,7 @@ Use files in the current directory as targets:
 find . -maxdepth 1 -type f | ush exec -- wc -l {}
 ```
 
-```
+```sh
 # Group files by detected type.
 find . -maxdepth 1 -type f | ush exec -- file --brief {} | ush freq stdout
 ```
