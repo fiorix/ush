@@ -131,8 +131,20 @@ wait_for_addresses() {
     return 1
 }
 
+# Ensure the outer container has the msgpack Python module.
+ensure_msgpack() {
+    if python3 -c "import msgpack" 2>/dev/null; then
+        return 0
+    fi
+    echo "Installing python3-msgpack in outer container..."
+    DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y python3-msgpack >/dev/null 2>&1
+}
+
 # Decode a length-prefixed MessagePack batch stream (one ExecResult per frame) to JSON lines.
 decode_msgpack_batch() {
+    ensure_msgpack
+
     local input=$1
     local output=$2
     python3 - "$input" "$output" << 'PY'
@@ -153,6 +165,7 @@ PY
 
 # Decode a length-prefixed MessagePack streaming frame stream to JSON lines.
 decode_msgpack_stream() {
+    ensure_msgpack
     local input=$1
     local output=$2
     python3 - "$input" "$output" << 'PY'
