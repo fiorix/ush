@@ -32,6 +32,7 @@ fn read_results(
             continue;
         }
 
+        // Malformed lines are silently skipped so freq can be piped mixed or partial output.
         let result: ExecResult = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(_) => continue,
@@ -72,6 +73,7 @@ pub fn duration(
             if truncate_nanos == 0 {
                 return format_duration(d);
             }
+            // Round durations up to the next multiple of the bucket size, not down.
             let d_nanos = d.as_nanos();
             let truncated = (d_nanos / truncate_nanos) * truncate_nanos + truncate_nanos;
             format_duration(Duration::from_nanos(truncated as u64))
@@ -147,6 +149,7 @@ fn format_freq(f: f64) -> String {
 pub fn encode_wide(w: &mut dyn Write, items: &[Item]) -> io::Result<()> {
     writeln!(w, "{:<8} {:<8} {:<8} value", "count", "targets", "freq %")?;
     for (i, item) in items.iter().enumerate() {
+        // Wide output truncates values at 50 characters to keep columns readable.
         let mut v = item.value.clone();
         if v.len() > 50 {
             v.truncate(50);

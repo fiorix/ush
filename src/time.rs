@@ -25,7 +25,7 @@ pub fn format_duration(d: Duration) -> String {
         remaining %= 60_000_000_000;
     }
 
-    // Seconds and sub-second units — keep output compact and readable
+    // Keep output compact: seconds with tenths, then ms, us, ns.
     if remaining > 0 {
         if remaining >= 1_000_000_000 {
             let secs = remaining / 1_000_000_000;
@@ -127,7 +127,7 @@ pub fn format_rfc3339_nano(t: SystemTime) -> String {
             year, month, day, hours, minutes, seconds
         )
     } else {
-        // Trim trailing zeros from nanoseconds like Go does
+        // Trim trailing zeros from nanoseconds.
         let nanos_str = format!("{:09}", nanos);
         let trimmed = nanos_str.trim_end_matches('0');
         format!(

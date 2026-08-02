@@ -1,4 +1,5 @@
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -47,7 +48,7 @@ pub(crate) struct ExecArgs {
     #[arg(short = 'k', long = "jump_key")]
     pub(crate) jump_key: Option<String>,
 
-    /// Jump command template
+    /// Jump command template. The value is split on whitespace; quoted tokens are not preserved.
     #[arg(long = "jump_cmd", default_value = DEFAULT_JUMP_COMMAND)]
     pub(crate) jump_cmd: String,
 
@@ -57,9 +58,10 @@ pub(crate) struct ExecArgs {
 }
 
 /// Install SIGINT/SIGTERM handler that sets the given shutdown flag.
+/// Workers check the flag before starting a new target. A target that is already running is allowed to finish (or time out).
 fn install_signal_handler(shutdown: &Arc<AtomicBool>) {
     // Store a raw pointer to the AtomicBool for the signal handler.
-    // Safe because the AtomicBool lives in an Arc that outlives the process.
+    // The AtomicBool lives in an Arc that outlives the process, but concurrent signal delivery is not synchronized here. This is a pragmatic simplification rather than a sound guarantee.
     static mut SHUTDOWN_PTR: *const AtomicBool = std::ptr::null();
 
     unsafe {
@@ -106,7 +108,8 @@ pub(crate) fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
     let targets = read_targets(io::stdin(), exclude.clone());
     let (result_tx, result_rx) = crossbeam_channel::bounded::<ExecResult>(1024);
 
-    // Spawn writer thread: receives results, serializes to JSON, prints to stdout
+    // Spawn writer thread: receives results, serializes to JSON, prints to stdout.
+    // Serialization errors are silently dropped; malformed results should not occur because ExecResult only contains String fields.
     let writer_handle = std::thread::spawn(move || {
         let stdout = io::stdout();
         for result in result_rx {
@@ -140,5 +143,3 @@ pub(crate) fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
     let _ = writer_handle.join();
     Ok(())
 }
-
-use std::io::Write;

@@ -65,10 +65,12 @@ pub fn jump_exec(
         );
 
         if !spec.jump_hosts_key_file.is_empty() {
+            // If ssh-add fails, agent_cmd is dropped without killing it and the ssh-agent process is leaked.
             ssh_add_key(host, &authsock, &spec.jump_hosts_key_file)?;
             vlog!("[verbose] jump_exec: key loaded for {}", host);
         }
 
+        // The jump command is split on whitespace. Quoted tokens (e.g. -o "ProxyCommand=...") are not preserved.
         let template_parts: Vec<&str> = spec.jump_command.split_whitespace().collect();
         if template_parts.is_empty() {
             return Err("empty jump command".into());
@@ -108,6 +110,7 @@ pub fn jump_exec(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Clear the environment before setting SSH_AUTH_SOCK. PATH, HOME, and other variables are not inherited.
             .env_clear()
             .env("SSH_AUTH_SOCK", &authsock)
             .spawn()?;
@@ -216,6 +219,7 @@ fn ssh_agent(jumphost: &str) -> Result<(Child, String), Box<dyn std::error::Erro
     let mut first_line = String::new();
     reader.read_line(&mut first_line)?;
 
+    // Expect ssh-agent -s output of the form "SSH_AUTH_SOCK=<path>; export SSH_AUTH_SOCK;".
     let parts: Vec<&str> = first_line.splitn(2, '=').collect();
     if parts.len() != 2 {
         let _ = cmd.kill();

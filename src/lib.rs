@@ -1,4 +1,4 @@
-//! ush — parallel command execution library.
+//! ush - parallel command execution library.
 //!
 //! Provide a [`Spec`] describing the command template and parallelism,
 //! feed targets through a crossbeam channel, and receive structured

@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use std::process;
 
 #[derive(Parser)]
-#[command(name = "ush", version = "v1.2", about = "Parallel command execution")]
+#[command(name = "ush", version = "v1.2.0", about = "Parallel command execution")]
 struct Cli {
     /// Enable verbose diagnostic output to stderr
     #[arg(short = 'v', long)]

@@ -244,7 +244,7 @@ fn run_cmd(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    // Set process group so we can kill the whole group on timeout
+    // Put the child in its own process group so timeout kills the whole group, not just the immediate child.
     unsafe {
         cmd.pre_exec(|| {
             let ret = syscall_setpgid(0, 0);
@@ -281,7 +281,7 @@ fn run_cmd(
     let stdout_thread = std::thread::spawn(move || bounded_read(stdout_pipe, stdout_limit, head));
     let stderr_thread = std::thread::spawn(move || bounded_read(stderr_pipe, stderr_limit, head));
 
-    // Condvar-based timeout: supports early cancellation and SIGTERM-before-SIGKILL
+    // Condvar-based timeout: supports early cancellation and a fixed 5-second SIGTERM-to-SIGKILL grace period.
     let done = Arc::new((Mutex::new(false), Condvar::new()));
     let done2 = done.clone();
 
@@ -416,6 +416,8 @@ fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(
     }
 }
 
+// Convert captured bytes to a string, handling truncation at UTF-8 boundaries.
+// Head truncation cuts at the last valid byte; tail truncation skips leading continuation bytes left by the limit.
 fn bytes_to_string(data: &[u8], truncated: bool, head: bool) -> String {
     let s = if head {
         let end = match std::str::from_utf8(data) {
