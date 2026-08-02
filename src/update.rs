@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 
 /// Default metadata URL. Override with `USH_UPDATE_METADATA_URL`.
-const DEFAULT_METADATA_URL: &str = "https://ush.fiorix.com/dl/cli/latest.json";
+const DEFAULT_METADATA_URL: &str = "https://fiorix.github.io/ush/dl/cli/latest.json";
 
 /// Environment variable that disables the update probe/banner.
 const ENV_DISABLE: &str = "USH_UPDATE_CHECK";
@@ -103,7 +103,7 @@ pub fn packaged_build_notice() -> Option<String> {
          Self-upgrade is disabled so it does not conflict with the packaged files.\n\n\
          Upgrade with:\n    {pm_upgrade}\n\n\
          Or remove the distro package and reinstall the standalone build:\n    \
-         curl -fsSL https://ush.fiorix.com/install.sh | bash"
+         curl -fsSL https://fiorix.github.io/ush/install.sh | bash"
     ))
 }
 
