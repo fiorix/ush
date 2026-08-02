@@ -131,6 +131,46 @@ wait_for_addresses() {
     return 1
 }
 
+# Decode a length-prefixed MessagePack batch stream (one ExecResult per frame) to JSON lines.
+decode_msgpack_batch() {
+    local input=$1
+    local output=$2
+    python3 - "$input" "$output" << 'PY'
+import sys, msgpack, struct, json
+inp, out = sys.argv[1], sys.argv[2]
+with open(inp, "rb") as f:
+    data = f.read()
+pos = 0
+with open(out, "w") as f:
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos:pos+4])[0]
+        pos += 4
+        result = msgpack.unpackb(data[pos:pos+length])
+        pos += length
+        f.write(json.dumps(result) + "\n")
+PY
+}
+
+# Decode a length-prefixed MessagePack streaming frame stream to JSON lines.
+decode_msgpack_stream() {
+    local input=$1
+    local output=$2
+    python3 - "$input" "$output" << 'PY'
+import sys, msgpack, struct, json
+inp, out = sys.argv[1], sys.argv[2]
+with open(inp, "rb") as f:
+    data = f.read()
+pos = 0
+with open(out, "w") as f:
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos:pos+4])[0]
+        pos += 4
+        frame = msgpack.unpackb(data[pos:pos+length])
+        pos += length
+        f.write(json.dumps(frame) + "\n")
+PY
+}
+
 if [ "$MODE" = "direct" ]; then
     echo "Creating $N target containers..."
     names=()
@@ -149,9 +189,10 @@ if [ "$MODE" = "direct" ]; then
     targets=/tmp/ush-e2e-targets.txt
     wait_for_addresses "$targets" "$N" "${names[@]}"
 
-    echo "Running ush exec hostname over $N hosts..."
-    output=/tmp/ush-e2e-output.json
-    "$USH" exec -p 10 -- \
+    echo "Running ush exec hostname over $N hosts (MessagePack)..."
+    output=/tmp/ush-e2e-output.mp
+    output_json=/tmp/ush-e2e-output.json
+    "$USH" exec --format=msgpack --batch -p 10 -- \
         ssh -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o BatchMode=yes \
@@ -161,6 +202,7 @@ if [ "$MODE" = "direct" ]; then
             test@{} \
             hostname \
         < "$targets" > "$output"
+    decode_msgpack_batch "$output" "$output_json"
 
 elif [ "$MODE" = "jump" ]; then
     echo "Creating 2 jump containers..."
@@ -193,9 +235,10 @@ elif [ "$MODE" = "jump" ]; then
     wait_for_addresses "$jumps" 2 "${jump_names[@]}"
     wait_for_addresses "$targets" "$expected" "${target_names[@]}"
 
-    echo "Running ush exec with jump hosts over $expected targets..."
-    output=/tmp/ush-e2e-output.json
-    "$USH" exec -j "$jumps" -k "$KEY" -p 10 \
+    echo "Running ush exec with jump hosts over $expected targets (MessagePack / uname)..."
+    output=/tmp/ush-e2e-output.mp
+    output_json=/tmp/ush-e2e-output.json
+    "$USH" exec --format=msgpack --batch -j "$jumps" -k "$KEY" -p 10 \
         --jump_cmd "ssh -A -oBatchMode=yes -oConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $KEY -- test@{jump}" \
         -- \
         ssh -o StrictHostKeyChecking=no \
@@ -204,27 +247,69 @@ elif [ "$MODE" = "jump" ]; then
             -o ConnectTimeout=5 \
             -o LogLevel=ERROR \
             test@{} \
-            hostname \
+            uname \
         < "$targets" > "$output"
+    decode_msgpack_batch "$output" "$output_json"
+
+    echo "Running jump-host 8k blob streaming test (MessagePack / 1 KiB chunks)..."
+    output_blob=/tmp/ush-e2e-output-blob.mp
+    output_blob_json=/tmp/ush-e2e-output-blob.json
+    "$USH" exec --format=msgpack -j "$jumps" -k "$KEY" -p 10 \
+        --chunk_size=1024 \
+        --stdout_bytes=8192 \
+        --head \
+        --jump_cmd "ssh -A -oBatchMode=yes -oConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i $KEY -- test@{jump}" \
+        -- \
+        ssh -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o BatchMode=yes \
+            -o ConnectTimeout=5 \
+            -o LogLevel=ERROR \
+            test@{} \
+            sh -c 'head -c 8192 /dev/zero | tr "\\0" "x"' \
+        < "$targets" > "$output_blob"
+    decode_msgpack_stream "$output_blob" "$output_blob_json"
+
+    # Verify the blob stream: each target should emit 8 stdout_chunk frames of 1024 bytes
+    # followed by a done frame with no truncation (8192 bytes captured exactly).
+    chunk_count=$(grep -c '"type":"stdout_chunk"' "$output_blob_json" || true)
+    expected_chunks=$((expected * 8))
+    done_count=$(grep -c '"type":"done"' "$output_blob_json" || true)
+    if [ "$chunk_count" -ne "$expected_chunks" ]; then
+        echo "Expected $expected_chunks stdout_chunk frames, got $chunk_count" >&2
+        cat "$output_blob_json" >&2
+        exit 1
+    fi
+    if [ "$done_count" -ne "$expected" ]; then
+        echo "Expected $expected done frames, got $done_count" >&2
+        cat "$output_blob_json" >&2
+        exit 1
+    fi
+    if grep -q '"stdout_truncated":true' "$output_blob_json"; then
+        echo "Blob output was unexpectedly truncated" >&2
+        cat "$output_blob_json" >&2
+        exit 1
+    fi
+    echo "Blob stream verified: $chunk_count chunks across $done_count targets"
 else
     echo "Unknown mode: $MODE" >&2
     exit 1
 fi
 
-total=$(wc -l < "$output")
-failures=$(grep -cE '"exit_status":[1-9][0-9]*' "$output" || true)
+total=$(wc -l < "$output_json")
+failures=$(grep -cE '"exit_status":[1-9][0-9]*' "$output_json" || true)
 
 if [ "$total" -ne "$expected" ]; then
     echo "Expected $expected results, got $total" >&2
-    cat "$output" >&2
+    cat "$output_json" >&2
     exit 1
 fi
 
 if [ "$failures" -ne 0 ]; then
     echo "$failures command(s) failed" >&2
-    cat "$output" >&2
+    cat "$output_json" >&2
     exit 1
 fi
 
 echo "All $expected hosts responded:"
-jq -r '.target + ": " + (.stdout | sub("\n$"; ""))' "$output" | sort
+jq -r '.target + ": " + (.stdout | sub("\n$"; ""))' "$output_json" | sort

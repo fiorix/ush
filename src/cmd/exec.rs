@@ -1,17 +1,24 @@
 use std::io;
-use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
+use ush::codec::Format;
 use ush::strutil::StringSet;
 use ush::time::parse_duration;
-use ush::{exec, jump_exec, read_targets, ExecResult, JumpSpec, Spec, DEFAULT_JUMP_COMMAND};
+use ush::{exec, jump_exec, read_targets, FrameEncoder, JumpSpec, Output, Spec, DEFAULT_JUMP_COMMAND};
 
 fn parse_duration_clap(s: &str) -> Result<Duration, String> {
     parse_duration(s).ok_or_else(|| format!("invalid duration: {s}"))
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+pub(crate) enum OutputFormat {
+    #[default]
+    Json,
+    Msgpack,
 }
 
 const EXAMPLES: &str = r"Examples:
@@ -43,6 +50,18 @@ pub(crate) struct ExecArgs {
     /// Capture first N bytes instead of last N bytes
     #[arg(long)]
     pub(crate) head: bool,
+
+    /// Output format
+    #[arg(long = "format", value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) format: OutputFormat,
+
+    /// Max bytes per chunk frame
+    #[arg(long = "chunk_size", default_value_t = 4096)]
+    pub(crate) chunk_size: usize,
+
+    /// Emit legacy one-line-per-target output with no chunk frames
+    #[arg(long)]
+    pub(crate) batch: bool,
 
     /// File containing target exclusion list
     #[arg(short = 'e', long = "exclude")]
@@ -114,21 +133,34 @@ pub(crate) fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let targets = read_targets(io::stdin(), exclude.clone());
-    let (result_tx, result_rx) = crossbeam_channel::bounded::<ExecResult>(1024);
+    let (result_tx, result_rx) = crossbeam_channel::bounded::<Output>(1024);
 
-    // Spawn writer thread: receives results, serializes to JSON, prints to stdout.
-    // Serialization errors are silently dropped; malformed results should not occur because ExecResult only contains String fields.
+    let format = match args.format {
+        OutputFormat::Json => Format::Json,
+        OutputFormat::Msgpack => Format::Msgpack,
+    };
+
+    // Spawn writer thread: receives frames or legacy results and encodes them to stdout.
     let writer_handle = std::thread::spawn(move || {
         let stdout = io::stdout();
-        for result in result_rx {
-            if let Ok(json) = serde_json::to_string(&result) {
-                let mut out = stdout.lock();
-                let _ = writeln!(out, "{}", json);
+        let mut encoder = FrameEncoder::new(stdout.lock(), format);
+        for output in result_rx {
+            let res = match output {
+                Output::Frame(frame) => encoder.write_frame(&frame),
+                Output::Legacy(result) => encoder.write_legacy(&result),
+            };
+            if res.is_err() {
+                break;
             }
         }
+        let _ = encoder.flush();
     });
 
     if let Some(ref jump_hosts_file) = args.jump_hosts_file {
+        if args.batch {
+            return Err("--batch is not supported with jump hosts".into());
+        }
+
         let mut hosts = StringSet::from_file(Path::new(jump_hosts_file))?;
         if let Some(ref exc) = exclude {
             for h in exc.sorted_strings() {
@@ -141,11 +173,19 @@ pub(crate) fn run(args: &ExecArgs) -> Result<(), Box<dyn std::error::Error>> {
             jump_hosts_key_file: args.jump_key.clone().unwrap_or_default(),
             jump_command: args.jump_cmd.clone(),
             jump_hosts: hosts.sorted_strings(),
+            chunk_size: args.chunk_size,
         };
 
         jump_exec(&jump_spec, targets, result_tx, shutdown)?;
     } else {
-        exec(&spec, targets, result_tx, shutdown)?;
+        exec(
+            &spec,
+            targets,
+            result_tx,
+            shutdown,
+            args.chunk_size,
+            args.batch,
+        )?;
     }
 
     let _ = writer_handle.join();

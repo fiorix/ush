@@ -145,6 +145,12 @@ pub enum Frame {
     },
 }
 
+/// A value sent from a worker to the writer thread.
+pub enum Output {
+    Frame(Frame),
+    Legacy(ExecResult),
+}
+
 // ── Public functions ─────────────────────────────────────────────────
 
 /// Reads targets from a reader, skipping empty lines, comments, and excluded targets.
@@ -181,13 +187,15 @@ pub fn read_targets(
 }
 
 /// Executes commands in parallel for each target received from the channel.
-/// Results are sent to the results channel as they complete.
+/// Frames or legacy results are sent to the results channel as they complete.
 /// The shutdown flag can be set to stop accepting new targets.
 pub fn exec(
     spec: &Spec,
     targets: channel::Receiver<String>,
-    results: channel::Sender<ExecResult>,
+    results: channel::Sender<Output>,
     shutdown: Arc<AtomicBool>,
+    chunk_size: usize,
+    batch: bool,
 ) -> Result<(), ExecError> {
     spec.validate()?;
 
@@ -218,7 +226,8 @@ pub fn exec(
                     break;
                 }
                 vlog!("[verbose] worker: executing target {}", target);
-                let result = run_cmd(
+                run_cmd(
+                    &results,
                     &command,
                     &args,
                     &target,
@@ -226,10 +235,9 @@ pub fn exec(
                     stdout_bytes,
                     stderr_bytes,
                     head,
+                    chunk_size,
+                    batch,
                 );
-                if results.send(result).is_err() {
-                    break;
-                }
             }
         });
         handles.push(handle);
@@ -247,6 +255,7 @@ pub fn exec(
 // ── Internal ─────────────────────────────────────────────────────────
 
 fn run_cmd(
+    results: &channel::Sender<Output>,
     command: &str,
     args: &[String],
     target: &str,
@@ -254,21 +263,12 @@ fn run_cmd(
     stdout_limit: usize,
     stderr_limit: usize,
     head: bool,
-) -> ExecResult {
+    chunk_size: usize,
+    batch: bool,
+) {
     let start_time = SystemTime::now();
     let cmd_str = command.replace("{}", target);
     let replaced_args: Vec<String> = args.iter().map(|a| a.replace("{}", target)).collect();
-
-    let mut result = ExecResult {
-        target: target.to_string(),
-        duration: String::new(),
-        start_time: format_rfc3339_nano(start_time),
-        end_time: String::new(),
-        exit_status: 0,
-        stdout: String::new(),
-        stderr: String::new(),
-        error: String::new(),
-    };
 
     let mut cmd = Command::new(&cmd_str);
     cmd.args(&replaced_args);
@@ -291,11 +291,18 @@ fn run_cmd(
         Ok(child) => child,
         Err(e) => {
             vlog!("[verbose] run_cmd: failed to spawn {}: {}", cmd_str, e);
-            result.error = e.to_string();
             let end = SystemTime::now();
-            result.end_time = format_rfc3339_nano(end);
-            result.duration = format_duration(end.duration_since(start_time).unwrap_or_default());
-            return result;
+            let _ = results.send(Output::Frame(Frame::Done {
+                target: target.to_string(),
+                start_time: format_rfc3339_nano(start_time),
+                end_time: format_rfc3339_nano(end),
+                duration: format_duration(end.duration_since(start_time).unwrap_or_default()),
+                exit_status: -1,
+                error: e.to_string(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+            }));
+            return;
         }
     };
 
@@ -309,9 +316,6 @@ fn run_cmd(
 
     let stdout_pipe = child.stdout.take().unwrap();
     let stderr_pipe = child.stderr.take().unwrap();
-
-    let stdout_thread = std::thread::spawn(move || bounded_read(stdout_pipe, stdout_limit, head));
-    let stderr_thread = std::thread::spawn(move || bounded_read(stderr_pipe, stderr_limit, head));
 
     // Condvar-based timeout: supports early cancellation and a fixed 5-second SIGTERM-to-SIGKILL grace period.
     let done = Arc::new((Mutex::new(false), Condvar::new()));
@@ -349,6 +353,47 @@ fn run_cmd(
         unsafe { syscall_kill(-pid, 9) };
     });
 
+    // Reader threads: batch mode captures to strings; streaming mode emits chunk frames.
+    let target_stdout = target.to_string();
+    let results_stdout = results.clone();
+    let stdout_thread = std::thread::spawn(move || {
+        if batch {
+            let (data, truncated) = bounded_read(stdout_pipe, stdout_limit, head).unwrap_or_default();
+            Some((bytes_to_string(&data, truncated, head), truncated))
+        } else {
+            let truncated = chunked_read(
+                stdout_pipe,
+                stdout_limit,
+                head,
+                chunk_size,
+                &target_stdout,
+                true,
+                &results_stdout,
+            );
+            Some((String::new(), truncated))
+        }
+    });
+
+    let target_stderr = target.to_string();
+    let results_stderr = results.clone();
+    let stderr_thread = std::thread::spawn(move || {
+        if batch {
+            let (data, truncated) = bounded_read(stderr_pipe, stderr_limit, head).unwrap_or_default();
+            Some((bytes_to_string(&data, truncated, head), truncated))
+        } else {
+            let truncated = chunked_read(
+                stderr_pipe,
+                stderr_limit,
+                head,
+                chunk_size,
+                &target_stderr,
+                false,
+                &results_stderr,
+            );
+            Some((String::new(), truncated))
+        }
+    });
+
     let wait_result = child.wait();
 
     {
@@ -361,41 +406,65 @@ fn run_cmd(
     let stdout_capture = stdout_thread.join().unwrap();
     let stderr_capture = stderr_thread.join().unwrap();
 
-    match wait_result {
+    let (exit_status, error) = match wait_result {
         Ok(status) => {
-            if !status.success() {
-                result.exit_status = status.code().unwrap_or(-1);
+            if status.success() {
+                (0, String::new())
+            } else {
+                let code = status.code().unwrap_or(-1);
                 if let Some(sig) = status.signal() {
-                    result.error = match sig {
+                    let err = match sig {
                         9 => "signal: killed".to_string(),
                         15 => "signal: terminated".to_string(),
                         _ => format!("signal: {}", sig),
                     };
-                    result.exit_status = -1;
-                    vlog!("[verbose] run_cmd: pid={} {}", pid, result.error);
+                    vlog!("[verbose] run_cmd: pid={} {}", pid, err);
+                    (-1, err)
                 } else {
-                    result.error = format!("exit status {}", result.exit_status);
-                    vlog!("[verbose] run_cmd: pid={} {}", pid, result.error);
+                    let err = format!("exit status {}", code);
+                    vlog!("[verbose] run_cmd: pid={} {}", pid, err);
+                    (code, err)
                 }
             }
         }
         Err(e) => {
-            result.error = e.to_string();
             vlog!("[verbose] run_cmd: pid={} wait error: {}", pid, e);
+            (-1, e.to_string())
         }
-    }
-
-    if let Ok((data, truncated)) = stdout_capture {
-        result.stdout = bytes_to_string(&data, truncated, head);
-    }
-    if let Ok((data, truncated)) = stderr_capture {
-        result.stderr = bytes_to_string(&data, truncated, head);
-    }
+    };
 
     let end = SystemTime::now();
-    result.end_time = format_rfc3339_nano(end);
-    result.duration = format_duration(end.duration_since(start_time).unwrap_or_default());
-    result
+    let start_time_str = format_rfc3339_nano(start_time);
+    let end_time_str = format_rfc3339_nano(end);
+    let duration_str = format_duration(end.duration_since(start_time).unwrap_or_default());
+
+    if batch {
+        let stdout = stdout_capture.map(|(s, _)| s).unwrap_or_default();
+        let stderr = stderr_capture.map(|(s, _)| s).unwrap_or_default();
+        let _ = results.send(Output::Legacy(ExecResult {
+            target: target.to_string(),
+            duration: duration_str,
+            start_time: start_time_str,
+            end_time: end_time_str,
+            exit_status,
+            stdout,
+            stderr,
+            error,
+        }));
+    } else {
+        let stdout_truncated = stdout_capture.map(|(_, t)| t).unwrap_or(false);
+        let stderr_truncated = stderr_capture.map(|(_, t)| t).unwrap_or(false);
+        let _ = results.send(Output::Frame(Frame::Done {
+            target: target.to_string(),
+            start_time: start_time_str,
+            end_time: end_time_str,
+            duration: duration_str,
+            exit_status,
+            error,
+            stdout_truncated,
+            stderr_truncated,
+        }));
+    }
 }
 
 fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(Vec<u8>, bool)> {
@@ -445,6 +514,110 @@ fn bounded_read(mut reader: impl Read, limit: usize, head: bool) -> io::Result<(
             buf.drain(..excess);
         }
         Ok((buf, truncated))
+    }
+}
+
+/// Streaming capture: read stdout/stderr in chunks and emit a frame for each chunk.
+/// Returns whether the stream was truncated by the limit.
+fn chunked_read(
+    mut reader: impl Read,
+    limit: usize,
+    head: bool,
+    chunk_size: usize,
+    target: &str,
+    is_stdout: bool,
+    results: &channel::Sender<Output>,
+) -> bool {
+    let mut tmp = vec![0u8; chunk_size];
+    let mut seq = 0u64;
+    let mut emitted = 0usize;
+    let mut truncated = false;
+
+    if head {
+        loop {
+            let n = match reader.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    vlog!("[verbose] chunked_read: read error for {}: {}", target, e);
+                    break;
+                }
+            };
+            let remaining = limit.saturating_sub(emitted);
+            if remaining == 0 {
+                truncated = true;
+                continue;
+            }
+            let take = std::cmp::min(n, remaining);
+            let data = bytes_to_string(&tmp[..take], false, true);
+            let frame = if is_stdout {
+                Frame::StdoutChunk {
+                    target: target.to_string(),
+                    seq,
+                    data,
+                }
+            } else {
+                Frame::StderrChunk {
+                    target: target.to_string(),
+                    seq,
+                    data,
+                }
+            };
+            if results.send(Output::Frame(frame)).is_err() {
+                return truncated;
+            }
+            emitted += take;
+            seq += 1;
+            if emitted >= limit {
+                truncated = true;
+            }
+        }
+        truncated
+    } else {
+        // Tail mode: keep a sliding window and emit the final window at EOF.
+        let mut buf = Vec::new();
+        let mut total_read = 0usize;
+        loop {
+            let n = match reader.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    vlog!("[verbose] chunked_read: read error for {}: {}", target, e);
+                    break;
+                }
+            };
+            buf.extend_from_slice(&tmp[..n]);
+            total_read += n;
+            if buf.len() > limit * 2 {
+                let excess = buf.len() - limit;
+                buf.drain(..excess);
+            }
+        }
+        truncated = total_read > limit;
+        if buf.len() > limit {
+            let excess = buf.len() - limit;
+            buf.drain(..excess);
+        }
+        if !buf.is_empty() {
+            let data = bytes_to_string(&buf, truncated, false);
+            let frame = if is_stdout {
+                Frame::StdoutChunk {
+                    target: target.to_string(),
+                    seq: 0,
+                    data,
+                }
+            } else {
+                Frame::StderrChunk {
+                    target: target.to_string(),
+                    seq: 0,
+                    data,
+                }
+            };
+            if results.send(Output::Frame(frame)).is_err() {
+                return truncated;
+            }
+        }
+        truncated
     }
 }
 
@@ -589,9 +762,12 @@ mod tests {
         drop(target_tx);
 
         let shutdown = Arc::new(AtomicBool::new(false));
-        exec(&spec, target_rx, result_tx, shutdown).unwrap();
+        exec(&spec, target_rx, result_tx, shutdown, 4096, true).unwrap();
 
-        let result = result_rx.recv().unwrap();
+        let result = match result_rx.recv().unwrap() {
+            Output::Legacy(r) => r,
+            _ => panic!("expected legacy output in batch mode"),
+        };
         assert_eq!(result.target, "hello world");
         assert_eq!(result.stdout, "hello[...]");
         assert_eq!(result.exit_status, 0);

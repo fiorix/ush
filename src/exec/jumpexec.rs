@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use crossbeam_channel as channel;
 
-use super::{ExecResult, Spec};
+use super::{Output, Spec};
+use crate::codec::Decoder as FrameDecoder;
 
 pub const DEFAULT_JUMP_COMMAND: &str = "ssh -A -oBatchMode=yes -oConnectTimeout=10 -- {jump}";
 
@@ -33,6 +34,7 @@ pub struct JumpSpec {
     pub jump_hosts_key_file: String,
     pub jump_command: String,
     pub jump_hosts: Vec<String>,
+    pub chunk_size: usize,
 }
 
 impl JumpSpec {
@@ -60,10 +62,14 @@ impl JumpSpec {
 pub fn jump_exec(
     spec: &JumpSpec,
     targets: channel::Receiver<String>,
-    results: channel::Sender<ExecResult>,
+    results: channel::Sender<Output>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     spec.validate()?;
+
+    if spec.chunk_size == 0 {
+        return Err("chunk_size must be greater than zero".into());
+    }
 
     let parallel = std::cmp::max(1, spec.spec.parallel / spec.jump_hosts.len());
     let mut handles = Vec::new();
@@ -108,6 +114,8 @@ pub fn jump_exec(
         args.push(format!("--parallel={}", parallel));
         args.push(format!("--stdout_bytes={}", spec.spec.stdout_bytes));
         args.push(format!("--stderr_bytes={}", spec.spec.stderr_bytes));
+        args.push(format!("--chunk_size={}", spec.chunk_size));
+        args.push("--format=msgpack".to_string());
         if spec.spec.head {
             args.push("--head".to_string());
         }
@@ -160,28 +168,22 @@ pub fn jump_exec(
             drop(stdin);
         });
 
-        // Read stdout (JSON lines), parse into ExecResult, forward to results channel
+        // Read stdout (length-prefixed MessagePack frames) and forward to results channel.
         let results2 = results.clone();
         let stdout_handle = std::thread::spawn(move || {
-            let reader = BufReader::new(child_stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if line.is_empty() {
-                            continue;
-                        }
-                        match serde_json::from_str::<ExecResult>(&line) {
-                            Ok(result) => {
-                                if results2.send(result).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                vlog!("[verbose] jump_exec: failed to parse result: {}", e);
-                            }
+            let mut decoder = FrameDecoder::new(child_stdout);
+            loop {
+                match decoder.read_frame() {
+                    Ok(Some(frame)) => {
+                        if results2.send(Output::Frame(frame)).is_err() {
+                            break;
                         }
                     }
-                    Err(_) => break,
+                    Ok(None) => break,
+                    Err(e) => {
+                        vlog!("[verbose] jump_exec: failed to decode frame: {}", e);
+                        break;
+                    }
                 }
             }
         });

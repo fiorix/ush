@@ -42,7 +42,7 @@ if ! sudo sdme fs ls | grep -q "^$OUTER_ROOTFS "; then
     cat > /tmp/ush-e2e-sdme.sdme <<'EOF'
 FROM ubuntu
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-client jq systemd-container
+    DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-client jq systemd-container python3-msgpack
 COPY /usr/local/bin/sdme /usr/local/bin/sdme
 COPY /etc/systemd/system/sdme@.service /etc/systemd/system/sdme@.service
 COPY /etc/systemd/system/var-lib-sdme-pool.mount /etc/systemd/system/var-lib-sdme-pool.mount

@@ -59,7 +59,7 @@ run_test() {
 
 test_basic_exec() {
     local out
-    out=$(printf 'hello\nworld\n' | "$USH" exec -- echo {})
+    out=$(printf 'hello\nworld\n' | "$USH" exec --batch -- echo {})
     assert_line_count "$out" 2
     assert_contains "$out" '"target":"hello"'
     assert_contains "$out" '"target":"world"'
@@ -68,20 +68,20 @@ test_basic_exec() {
 
 test_parallel_exec() {
     local out
-    out=$(seq 1 10 | "$USH" exec -p 4 -- echo {})
+    out=$(seq 1 10 | "$USH" exec --batch -p 4 -- echo {})
     assert_line_count "$out" 10
 }
 
 test_timeout_sigterm() {
     local out
-    out=$(printf 'test\n' | "$USH" exec -t 2s -- sleep 10)
+    out=$(printf 'test\n' | "$USH" exec --batch -t 2s -- sleep 10)
     assert_contains "$out" '"signal: terminated"'
     assert_contains "$out" '"exit_status":-1'
 }
 
 test_exit_code() {
     local out
-    out=$(printf 'test\n' | "$USH" exec -- false)
+    out=$(printf 'test\n' | "$USH" exec --batch -- false)
     assert_contains "$out" '"exit_status":'
     # false exits with 1
     assert_contains "$out" '"error":"exit status 1"'
@@ -89,14 +89,23 @@ test_exit_code() {
 
 test_stdout_head() {
     local out
-    out=$(printf 'test\n' | "$USH" exec --stdout_bytes=5 --head -- echo hello_world)
+    out=$(printf 'test\n' | "$USH" exec --batch --stdout_bytes=5 --head -- echo hello_world)
     assert_contains "$out" '"stdout":"hello[...]"'
 }
 
 test_stdout_tail() {
     local out
-    out=$(printf 'test\n' | "$USH" exec --stdout_bytes=5 -- echo hello_world)
+    out=$(printf 'test\n' | "$USH" exec --batch --stdout_bytes=5 -- echo hello_world)
     assert_contains "$out" '"stdout":"[...]orld'
+}
+
+test_streaming_chunks() {
+    local out
+    out=$(printf 't\n' | "$USH" exec --chunk_size=4 --stdout_bytes=16 --head -- sh -c 'printf "%0.sx" $(seq 1 20)')
+    local chunk_count
+    chunk_count=$(printf '%s\n' "$out" | grep -c '"type":"stdout_chunk"')
+    assert_eq "$chunk_count" "4"
+    assert_contains "$out" '"stdout_truncated":true'
 }
 
 test_exclude_file() {
@@ -172,6 +181,7 @@ run_test "timeout_sigterm"   test_timeout_sigterm
 run_test "exit_code"         test_exit_code
 run_test "stdout_head"       test_stdout_head
 run_test "stdout_tail"       test_stdout_tail
+run_test "streaming_chunks"  test_streaming_chunks
 run_test "exclude_file"      test_exclude_file
 run_test "comments_skipped"  test_comments_skipped
 run_test "empty_input"       test_empty_input
