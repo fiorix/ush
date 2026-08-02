@@ -125,16 +125,6 @@ pre {
   position: relative;
 }
 
-/* Terminal window chrome for code blocks. */
-pre::before {
-  content: "─[ ] x";
-  display: block;
-  color: var(--fg-muted);
-  font-size: 0.75rem;
-  margin-bottom: 0.5rem;
-  letter-spacing: 0.12em;
-}
-
 code {
   padding: 0.1rem 0.35rem;
   font-size: 0.95em;
