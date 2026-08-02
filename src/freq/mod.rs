@@ -2,8 +2,14 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
-use crate::exec::ExecResult;
+use crate::exec::{ExecResult, Frame};
 use crate::time::{format_duration, parse_duration};
+
+#[derive(Default)]
+struct TargetState {
+    stdout: String,
+    stderr: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct Item {
@@ -24,6 +30,7 @@ fn read_results(
 ) -> Result<Vec<Item>, Box<dyn std::error::Error>> {
     let buf = io::BufReader::new(reader);
     let mut m: HashMap<String, Vec<String>> = HashMap::new();
+    let mut states: HashMap<String, TargetState> = HashMap::new();
     let mut total = 0usize;
 
     for line in buf.lines() {
@@ -33,14 +40,47 @@ fn read_results(
         }
 
         // Malformed lines are silently skipped so freq can be piped mixed or partial output.
-        let result: ExecResult = match serde_json::from_str(&line) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        total += 1;
-        let key = key_fn(&result);
-        m.entry(key).or_default().push(result.target);
+        // Accept both the streaming frame protocol and the legacy ExecResult format.
+        match serde_json::from_str::<Frame>(&line) {
+            Ok(Frame::StdoutChunk { target, data, .. }) => {
+                states.entry(target).or_default().stdout.push_str(&data);
+            }
+            Ok(Frame::StderrChunk { target, data, .. }) => {
+                states.entry(target).or_default().stderr.push_str(&data);
+            }
+            Ok(Frame::Done {
+                target,
+                start_time,
+                end_time,
+                duration,
+                exit_status,
+                error,
+                ..
+            }) => {
+                total += 1;
+                let state = states.remove(&target).unwrap_or_default();
+                let result = ExecResult {
+                    target,
+                    duration,
+                    start_time,
+                    end_time,
+                    exit_status,
+                    stdout: state.stdout,
+                    stderr: state.stderr,
+                    error,
+                };
+                let key = key_fn(&result);
+                m.entry(key).or_default().push(result.target);
+            }
+            Err(_) => {
+                // Fall back to legacy one-line-per-target ExecResult.
+                if let Ok(result) = serde_json::from_str::<ExecResult>(&line) {
+                    total += 1;
+                    let key = key_fn(&result);
+                    m.entry(key).or_default().push(result.target);
+                }
+            }
+        }
     }
 
     if m.is_empty() {
@@ -200,33 +240,57 @@ fn shell_quote(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn make_result_json(
+    fn make_frames(
         target: &str,
         duration: &str,
         exit_status: i32,
         stdout: &str,
         stderr: &str,
     ) -> String {
-        serde_json::to_string(&ExecResult {
-            target: target.to_string(),
-            duration: duration.to_string(),
-            start_time: "2024-01-01T00:00:00Z".to_string(),
-            end_time: "2024-01-01T00:00:00Z".to_string(),
-            exit_status,
-            stdout: stdout.to_string(),
-            stderr: stderr.to_string(),
-            error: String::new(),
-        })
-        .unwrap()
+        let mut lines = Vec::new();
+        if !stdout.is_empty() {
+            lines.push(
+                serde_json::to_string(&Frame::StdoutChunk {
+                    target: target.to_string(),
+                    seq: 0,
+                    data: stdout.to_string(),
+                })
+                .unwrap(),
+            );
+        }
+        if !stderr.is_empty() {
+            lines.push(
+                serde_json::to_string(&Frame::StderrChunk {
+                    target: target.to_string(),
+                    seq: 0,
+                    data: stderr.to_string(),
+                })
+                .unwrap(),
+            );
+        }
+        lines.push(
+            serde_json::to_string(&Frame::Done {
+                target: target.to_string(),
+                start_time: "2024-01-01T00:00:00Z".to_string(),
+                end_time: "2024-01-01T00:00:00Z".to_string(),
+                duration: duration.to_string(),
+                exit_status,
+                error: String::new(),
+                stdout_truncated: false,
+                stderr_truncated: false,
+            })
+            .unwrap(),
+        );
+        lines.join("\n")
     }
 
     #[test]
     fn test_duration() {
         let input = format!(
             "{}\n{}\n{}\n",
-            make_result_json("a", "8ms", 0, "", ""),
-            make_result_json("b", "6ms", 0, "", ""),
-            make_result_json("c", "2ms", 0, "", ""),
+            make_frames("a", "8ms", 0, "", ""),
+            make_frames("b", "6ms", 0, "", ""),
+            make_frames("c", "2ms", 0, "", ""),
         );
 
         let items = duration(input.as_bytes(), Duration::from_millis(5)).unwrap();
@@ -241,9 +305,9 @@ mod tests {
     fn test_exit_status() {
         let input = format!(
             "{}\n{}\n{}\n",
-            make_result_json("a", "0s", 255, "", ""),
-            make_result_json("b", "0s", 255, "", ""),
-            make_result_json("c", "0s", 1, "", ""),
+            make_frames("a", "0s", 255, "", ""),
+            make_frames("b", "0s", 255, "", ""),
+            make_frames("c", "0s", 1, "", ""),
         );
 
         let items = exit_status(input.as_bytes()).unwrap();
@@ -258,9 +322,9 @@ mod tests {
     fn test_stdout_stderr() {
         let input = format!(
             "{}\n{}\n{}\n",
-            make_result_json("a", "0s", 0, "hello", "foobar"),
-            make_result_json("b", "0s", 0, "hello", "foobar"),
-            make_result_json("c", "0s", 0, "world", ""),
+            make_frames("a", "0s", 0, "hello", "foobar"),
+            make_frames("b", "0s", 0, "hello", "foobar"),
+            make_frames("c", "0s", 0, "world", ""),
         );
 
         let items = stdout(input.as_bytes()).unwrap();
@@ -276,6 +340,86 @@ mod tests {
         let mut t1 = items[1].targets.clone();
         t1.sort();
         assert_eq!(t1, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_legacy_exec_result() {
+        let input = format!(
+            "{}\n{}\n{}\n",
+            serde_json::to_string(&ExecResult {
+                target: "a".to_string(),
+                duration: "0s".to_string(),
+                start_time: "2024-01-01T00:00:00Z".to_string(),
+                end_time: "2024-01-01T00:00:00Z".to_string(),
+                exit_status: 0,
+                stdout: "hello".to_string(),
+                stderr: String::new(),
+                error: String::new(),
+            })
+            .unwrap(),
+            serde_json::to_string(&ExecResult {
+                target: "b".to_string(),
+                duration: "0s".to_string(),
+                start_time: "2024-01-01T00:00:00Z".to_string(),
+                end_time: "2024-01-01T00:00:00Z".to_string(),
+                exit_status: 0,
+                stdout: "hello".to_string(),
+                stderr: String::new(),
+                error: String::new(),
+            })
+            .unwrap(),
+            serde_json::to_string(&ExecResult {
+                target: "c".to_string(),
+                duration: "0s".to_string(),
+                start_time: "2024-01-01T00:00:00Z".to_string(),
+                end_time: "2024-01-01T00:00:00Z".to_string(),
+                exit_status: 0,
+                stdout: "world".to_string(),
+                stderr: String::new(),
+                error: String::new(),
+            })
+            .unwrap(),
+        );
+
+        let items = stdout(input.as_bytes()).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].targets, vec!["c"]);
+        let mut t1 = items[1].targets.clone();
+        t1.sort();
+        assert_eq!(t1, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_chunks_collected_per_target() {
+        let mut input = String::new();
+        input.push_str(&serde_json::to_string(&Frame::StdoutChunk {
+            target: "a".to_string(),
+            seq: 0,
+            data: "he".to_string(),
+        }).unwrap());
+        input.push('\n');
+        input.push_str(&serde_json::to_string(&Frame::StdoutChunk {
+            target: "a".to_string(),
+            seq: 1,
+            data: "llo".to_string(),
+        }).unwrap());
+        input.push('\n');
+        input.push_str(&serde_json::to_string(&Frame::Done {
+            target: "a".to_string(),
+            start_time: "2024-01-01T00:00:00Z".to_string(),
+            end_time: "2024-01-01T00:00:00Z".to_string(),
+            duration: "0s".to_string(),
+            exit_status: 0,
+            error: String::new(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+        }).unwrap());
+        input.push('\n');
+
+        let items = stdout(input.as_bytes()).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].value, "hello");
+        assert_eq!(items[0].targets, vec!["a"]);
     }
 
     #[test]

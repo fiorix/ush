@@ -8,7 +8,15 @@ fn parse_duration_clap(s: &str) -> Result<std::time::Duration, String> {
     parse_duration(s).ok_or_else(|| format!("invalid duration: {s}"))
 }
 
+const EXAMPLES: &str = r"Examples:
+  ush exec -- echo {} | ush freq stdout
+  ush exec -- echo {} | ush freq stdout --json
+  ush exec -- true | ush freq exitstatus
+  ush exec -- sleep {} | ush freq duration 1s
+";
+
 #[derive(Args)]
+#[command(after_help = EXAMPLES)]
 pub(crate) struct FreqArgs {
     #[command(subcommand)]
     pub(crate) command: FreqCommand,
@@ -17,24 +25,28 @@ pub(crate) struct FreqArgs {
 #[derive(Subcommand)]
 pub(crate) enum FreqCommand {
     /// Print frequency of similar stdout
+    #[command(after_help = EXAMPLES)]
     Stdout {
         /// Encode output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Print frequency of similar stderr
+    #[command(after_help = EXAMPLES)]
     Stderr {
         /// Encode output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Print frequency of similar exit status
+    #[command(after_help = EXAMPLES)]
     Exitstatus {
         /// Encode output as JSON
         #[arg(long)]
         json: bool,
     },
     /// Print execution duration distribution
+    #[command(after_help = EXAMPLES)]
     Duration {
         /// Duration bucket size (e.g., 5s, 1m)
         #[arg(value_parser = parse_duration_clap)]

@@ -113,6 +113,38 @@ pub struct ExecResult {
     pub error: String,
 }
 
+/// A single message in the streaming `ush exec` output.
+///
+/// Chunk frames carry pieces of stdout/stderr as they arrive. The `done` frame
+/// marks completion and carries metadata. Sequence numbers are per target per fd.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Frame {
+    StdoutChunk {
+        target: String,
+        seq: u64,
+        data: String,
+    },
+    StderrChunk {
+        target: String,
+        seq: u64,
+        data: String,
+    },
+    Done {
+        target: String,
+        start_time: String,
+        end_time: String,
+        duration: String,
+        exit_status: i32,
+        #[serde(default)]
+        error: String,
+        #[serde(default)]
+        stdout_truncated: bool,
+        #[serde(default)]
+        stderr_truncated: bool,
+    },
+}
+
 // ── Public functions ─────────────────────────────────────────────────
 
 /// Reads targets from a reader, skipping empty lines, comments, and excluded targets.

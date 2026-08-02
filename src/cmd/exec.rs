@@ -14,7 +14,15 @@ fn parse_duration_clap(s: &str) -> Result<Duration, String> {
     parse_duration(s).ok_or_else(|| format!("invalid duration: {s}"))
 }
 
+const EXAMPLES: &str = r"Examples:
+  echo -ne 'host1\nhost2\n' | ush exec -- echo {}
+  cat hosts.txt | ush exec -p 4 -- ssh user@{} -- hostid
+  cat hosts.txt | ush exec -j jumps.txt -k jump.key -- ssh user@{} -- hostid
+  printf 'test\n' | ush exec -t 2s --stdout_bytes=5 -- false
+";
+
 #[derive(Args)]
+#[command(after_help = EXAMPLES)]
 pub(crate) struct ExecArgs {
     /// Timeout of each command execution [default: 1m]
     #[arg(short = 't', long, default_value = "1m", value_parser = parse_duration_clap)]

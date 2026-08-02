@@ -20,6 +20,8 @@ enum Command {
     Exec(cmd::exec::ExecArgs),
     /// Print frequency of events from exec JSON output
     Freq(cmd::freq::FreqArgs),
+    /// Dump an agent skill document for using ush
+    DumpSkill,
 }
 
 fn main() {
@@ -32,6 +34,10 @@ fn main() {
     let result = match cli.command {
         Command::Exec(args) => cmd::exec::run(&args),
         Command::Freq(args) => cmd::freq::run(&args),
+        Command::DumpSkill => {
+            cmd::dumpskill::run();
+            return;
+        }
     };
 
     if let Err(e) = result {
