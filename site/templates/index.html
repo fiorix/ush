@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}ush — parallel command execution{% endblock %}
+
+{% block content %}
+  <header>
+    <h1>ush</h1>
+    <p>Parallel command execution over a stream of targets.</p>
+    <p>
+      <a href="https://github.com/fiorix/ush">github.com/fiorix/ush</a>
+      <span id="version-badge" class="version-badge"></span>
+    </p>
+  </header>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p>Copy and paste the command for your shell. The installer defaults to
+      <code>~/.local/bin/ush</code> and can be overridden with
+      <code>PREFIX=/path/to/dir</code>.</p>
+
+    <pre><code id="install-cmd">curl -fsSL <span class="site-url">https://ush.fiorix.com</span>/install.sh | bash</code></pre>
+    <p class="note">Auto-detects Linux (x86_64 / aarch64) and macOS (arm64).
+      All downloads are verified with SHA-256 checksums.</p>
+  </section>
+
+  <section id="usage">
+    <h2>Usage</h2>
+    <pre><code>echo -ne 'hello\nworld\n' | ush exec -- echo {}
+cat hosts.txt | ush exec -- ssh user@{} -- hostname</code></pre>
+  </section>
+
+  <section id="downloads">
+    <h2>Downloads</h2>
+    <p>Static binaries and checksums are available on the
+      <a href="https://github.com/fiorix/ush/releases/latest">releases page</a>.</p>
+  </section>
+{% endblock %}

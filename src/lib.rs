@@ -12,6 +12,7 @@ mod exec;
 pub mod freq;
 pub mod strutil;
 pub mod time;
+pub mod update;
 
 pub use codec::{Decoder as FrameDecoder, Encoder as FrameEncoder, Format as OutputFormat};
 pub use exec::jumpexec::jump_exec;

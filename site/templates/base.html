@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ config.title }}{% endblock %}</title>
+<link rel="stylesheet" href="{{ get_url(path='css/style.css') }}">
+</head>
+<body>
+  <div class="container">
+    {% block content %}{% endblock %}
+  </div>
+<script src="{{ get_url(path='js/version-badge.js') }}"></script>
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

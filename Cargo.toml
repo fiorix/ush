@@ -4,8 +4,14 @@ version = "2.0.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+libc = "0.2"
+rmp-serde = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rmp-serde = "1"
+sha2 = "0.10"
+tar = "0.4"
+ureq = "3"
 crossbeam-channel = "0.5"

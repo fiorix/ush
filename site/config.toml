@@ -1,0 +1,11 @@
+base_url = "https://ush.fiorix.com"
+title = "ush"
+description = "Parallel command execution over a stream of targets"
+compile_sass = false
+build_search_index = false
+minify_html = false
+
+[markdown]
+insert_anchor_links = "heading"
+
+[extra]
