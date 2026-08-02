@@ -6,7 +6,7 @@
 
 - Let a new user install `ush` with one command (domain is configurable; the site is hosted on GitHub Pages):
   ```sh
-  curl -fsSL https://fiorix.github.io/ush/install.sh | bash
+  curl -fsSL https://ush.sucks/install.sh | bash
   ```
   The script is POSIX `sh` and also works under `bash`. The default install location is `~/.local/bin/ush`.
 - Let installed copies upgrade themselves with `ush upgrade`.

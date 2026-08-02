@@ -1,4 +1,4 @@
-base_url = "https://fiorix.github.io/ush"
+base_url = "https://ush.sucks"
 title = "ush"
 description = "Parallel command execution over a stream of targets"
 compile_sass = false

@@ -1,18 +1,18 @@
 #!/bin/sh
 # ush installer for macOS and Linux.
 #
-#   curl -fsSL https://fiorix.github.io/ush/install.sh | bash
+#   curl -fsSL https://ush.sucks/install.sh | bash
 #
 # Downloads release metadata, selects the matching standalone tarball,
 # verifies SHA256, and installs `ush` into PREFIX/bin.
 # Defaults:
 #
-#   METADATA_URL=https://fiorix.github.io/ush/dl/cli/latest.json
+#   METADATA_URL=https://ush.sucks/dl/cli/latest.json
 #   PREFIX=$HOME/.local
 
 set -eu
 
-DEFAULT_METADATA_BASE="https://fiorix.github.io/ush/dl/cli"
+DEFAULT_METADATA_BASE="https://ush.sucks/dl/cli"
 PREFIX="${PREFIX:-$HOME/.local}"
 
 err() { printf 'install: %s\n' "$1" >&2; exit 1; }

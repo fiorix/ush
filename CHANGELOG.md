@@ -3,7 +3,7 @@
 ## 2.1.0
 
 - Add `ush upgrade` with automatic update checks.
-- New website at https://fiorix.github.io/ush/ with `curl | bash` installer.
+- New website at https://ush.sucks/ with `curl | bash` installer.
 - GitHub Actions release pipeline: static musl Linux binaries, macOS binary,
   SHA256SUMS, and release metadata.
 
