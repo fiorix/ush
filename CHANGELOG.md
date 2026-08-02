@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0
+
+- Add `ush upgrade` with automatic update checks.
+- New website at https://fiorix.github.io/ush/ with `curl | bash` installer.
+- GitHub Actions release pipeline: static musl Linux binaries, macOS binary,
+  SHA256SUMS, and release metadata.
+
 ## 2.0.0
 
 - Streaming output by default: `stdout_chunk`, `stderr_chunk`, and `done` frames.
