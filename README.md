@@ -1,6 +1,6 @@
 # ush
 
-ush is a command-line tool and library for parallel execution of shell commands over a stream of targets. It reads targets from stdin, substitutes each target into `{}` placeholders in a command template, runs the commands in parallel, and emits one JSON object per result to stdout.
+ush is a command-line tool and library for parallel execution of shell commands over a stream of targets. It reads targets from stdin, substitutes each target into `{}` placeholders in a command template, runs the commands in parallel, and emits streaming frames to stdout (JSON by default; MessagePack with `--format=msgpack`). Use `--batch` for the legacy one-line-per-target output.
 
 ## Usage
 
@@ -22,6 +22,24 @@ Run through jump hosts:
 cat hosts.txt | ush exec -j jump_hosts.txt -k jump.key -- ssh user@{} -- hostid
 ```
 
+Aggregate stdout across targets:
+
+```sh
+cat hosts.txt | ush exec -- ssh user@{} -- hostname | ush freq stdout
+```
+
+Aggregate exit status:
+
+```sh
+cat hosts.txt | ush exec -- ssh user@{} -- true | ush freq exitstatus
+```
+
+Show duration distribution in 1-second buckets:
+
+```sh
+cat hosts.txt | ush exec -- ssh user@{} -- sleep {} | ush freq duration 1s
+```
+
 ## Commands
 
 - `ush exec`: execute parallel commands from stdin.
@@ -36,7 +54,7 @@ flowchart LR
     stdin[stdin targets] --> exec[ush exec]
     exec --> workers[worker pool]
     workers --> procs[child processes]
-    workers --> stdout[JSON on stdout]
+    workers --> frames[frames on stdout]
 ```
 
 ## Jump hosts
@@ -49,6 +67,7 @@ flowchart LR
     local --> j2[jump host 2]
     j1 --> t1[targets subset]
     j2 --> t2[targets subset]
-    t1 --> out[JSON on stdout]
-    t2 --> out
+    j1 -.->|MessagePack| local
+    j2 -.->|MessagePack| local
+    local --> out[JSON frames on stdout]
 ```
