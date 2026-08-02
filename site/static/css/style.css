@@ -1,15 +1,15 @@
 :root {
-  --bg: #0a0a0a;
-  --bg-dim: #111111;
-  --fg: #33ff33;
-  --fg-dim: #1a991a;
-  --fg-muted: #5a8a5a;
-  --accent: #00ffff;
-  --accent-dim: #008b8b;
+  --bg: #1a1a1a;
+  --bg-dim: #151515;
+  --fg: #d4d4d4;
+  --fg-dim: #888888;
+  --fg-muted: #666666;
+  --accent: #5b9bd5;
+  --accent-dim: #4a7fc0;
   --warn: #ffaa00;
-  --border: #224422;
-  --code-bg: #0d0d0d;
-  --term-shadow: 0 0 6px rgba(51, 255, 51, 0.15);
+  --border: #333333;
+  --code-bg: #121212;
+  --term-shadow: 0 0 4px rgba(91, 155, 213, 0.08);
 }
 
 * {
@@ -21,10 +21,10 @@ html {
 }
 
 body {
-  font-family: "Courier New", "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace;
+  font-family: "SF Mono", "Courier New", "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace;
   background: var(--bg);
   color: var(--fg);
-  line-height: 1.55;
+  line-height: 1.6;
   margin: 0;
   padding: 0;
   text-shadow: var(--term-shadow);
@@ -41,8 +41,8 @@ body::before {
   pointer-events: none;
   background: repeating-linear-gradient(
     0deg,
-    rgba(0, 0, 0, 0.12) 0px,
-    rgba(0, 0, 0, 0.12) 1px,
+    rgba(0, 0, 0, 0.08) 0px,
+    rgba(0, 0, 0, 0.08) 1px,
     transparent 1px,
     transparent 2px
   );
@@ -50,7 +50,7 @@ body::before {
 }
 
 .container {
-  max-width: 760px;
+  max-width: 780px;
   margin: 0 auto;
   padding: 2rem 1.25rem;
   position: relative;
@@ -64,10 +64,10 @@ header {
 }
 
 h1 {
-  font-size: 2.4rem;
+  font-size: 2.2rem;
   margin: 0 0 0.5rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
 }
 
 h1::before {
@@ -76,12 +76,13 @@ h1::before {
 }
 
 h2 {
-  font-size: 1.15rem;
+  font-size: 1.05rem;
   margin-top: 2.25rem;
   margin-bottom: 0.75rem;
   color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
+  font-weight: 600;
 }
 
 h2::before {
@@ -102,7 +103,7 @@ p {
 a {
   color: var(--accent);
   text-decoration: none;
-  border-bottom: 1px dashed var(--accent-dim);
+  border-bottom: 1px solid var(--accent-dim);
 }
 
 a:hover {
@@ -112,7 +113,7 @@ a:hover {
 }
 
 pre, code {
-  font-family: "Courier New", "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace;
+  font-family: "SF Mono", "Courier New", "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace;
   background: var(--code-bg);
   border: 1px solid var(--border);
 }
@@ -120,18 +121,18 @@ pre, code {
 pre {
   padding: 1rem;
   overflow-x: auto;
-  box-shadow: inset 0 0 12px rgba(51, 255, 51, 0.06);
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.4);
   position: relative;
 }
 
 /* Terminal window chrome for code blocks. */
 pre::before {
-  content: "- [ ] x";
+  content: "─[ ] x";
   display: block;
   color: var(--fg-muted);
   font-size: 0.75rem;
   margin-bottom: 0.5rem;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
 }
 
 code {
@@ -148,7 +149,7 @@ pre code {
 }
 
 .note {
-  color: var(--fg-muted);
+  color: var(--fg-dim);
   font-size: 0.9rem;
 }
 
@@ -157,9 +158,9 @@ pre code {
   margin-left: 0.6rem;
   padding: 0.1rem 0.5rem;
   font-size: 0.75rem;
-  border: 1px solid var(--fg-dim);
+  border: 1px solid var(--border);
   color: var(--warn);
-  background: rgba(255, 170, 0, 0.08);
+  background: rgba(255, 170, 0, 0.06);
 }
 
 .version-badge:empty {
@@ -176,15 +177,7 @@ section {
   margin-bottom: 1.5rem;
 }
 
-footer, .footer {
-  margin-top: 3rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
-  color: var(--fg-muted);
-  font-size: 0.85rem;
-}
-
 ::selection {
-  background: var(--fg);
+  background: var(--accent);
   color: var(--bg);
 }
