@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.1.1
+
+- Consolidate test scripts under `tests/`.
+- Normalize `sdme` references to lowercase.
+
 ## 2.1.0
 
 - Add `ush upgrade` with automatic update checks.
