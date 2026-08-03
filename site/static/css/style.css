@@ -1,15 +1,15 @@
 :root {
-  --bg: #1a1a1a;
-  --bg-dim: #151515;
-  --fg: #d4d4d4;
-  --fg-dim: #888888;
-  --fg-muted: #666666;
-  --accent: #5b9bd5;
-  --accent-dim: #4a7fc0;
-  --warn: #ffaa00;
-  --border: #333333;
-  --code-bg: #121212;
-  --term-shadow: 0 0 4px rgba(91, 155, 213, 0.08);
+  --bg: #07080a;
+  --bg-dim: #0b0c10;
+  --fg: #c8d6e0;
+  --fg-dim: #5f6e7a;
+  --fg-muted: #3a4550;
+  --accent: #00f0ff;
+  --accent-dim: #00a8b3;
+  --warn: #ff9e00;
+  --border: #1a2028;
+  --code-bg: #050608;
+  --term-shadow: 0 0 5px rgba(0, 240, 255, 0.25);
 }
 
 * {
@@ -22,7 +22,9 @@ html {
 
 body {
   font-family: "SF Mono", "Courier New", "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace;
-  background: var(--bg);
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(0, 240, 255, 0.04) 0%, transparent 55%),
+    var(--bg);
   color: var(--fg);
   line-height: 1.6;
   margin: 0;
@@ -30,7 +32,7 @@ body {
   text-shadow: var(--term-shadow);
 }
 
-/* Subtle scanline texture. */
+/* CRT scanline + subtle vignette overlay. */
 body::before {
   content: "";
   position: fixed;
@@ -39,18 +41,20 @@ body::before {
   width: 100vw;
   height: 100vh;
   pointer-events: none;
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.08) 0px,
-    rgba(0, 0, 0, 0.08) 1px,
-    transparent 1px,
-    transparent 2px
-  );
+  background:
+    radial-gradient(ellipse at center, transparent 40%, rgba(0, 0, 0, 0.55) 100%),
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.18) 0px,
+      rgba(0, 0, 0, 0.18) 1px,
+      transparent 1px,
+      transparent 3px
+    );
   z-index: 9999;
 }
 
 .container {
-  max-width: 780px;
+  max-width: 820px;
   margin: 0 auto;
   padding: 2rem 1.25rem;
   position: relative;
@@ -64,25 +68,29 @@ header {
 }
 
 h1 {
-  font-size: 2.2rem;
+  font-size: 2.4rem;
   margin: 0 0 0.5rem;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
   font-weight: 600;
+  color: var(--accent);
+  text-shadow: 0 0 12px rgba(0, 240, 255, 0.35);
 }
 
 h1::before {
   content: "> ";
-  color: var(--accent);
+  color: var(--warn);
+  text-shadow: 0 0 10px rgba(255, 158, 0, 0.5);
 }
 
 h2 {
-  font-size: 1.05rem;
+  font-size: 1rem;
   margin-top: 2.25rem;
   margin-bottom: 0.75rem;
   color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   font-weight: 600;
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.25);
 }
 
 h2::before {
@@ -104,12 +112,14 @@ a {
   color: var(--accent);
   text-decoration: none;
   border-bottom: 1px solid var(--accent-dim);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 a:hover {
   color: var(--bg);
   background: var(--accent);
   border-bottom-color: var(--accent);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
 }
 
 pre, code {
@@ -121,8 +131,21 @@ pre, code {
 pre {
   padding: 1rem;
   overflow-x: auto;
-  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.4);
+  box-shadow:
+    inset 0 0 14px rgba(0, 0, 0, 0.7),
+    0 0 8px rgba(0, 240, 255, 0.06);
   position: relative;
+}
+
+pre::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-dim), transparent);
+  opacity: 0.5;
 }
 
 code {
@@ -148,9 +171,10 @@ pre code {
   margin-left: 0.6rem;
   padding: 0.1rem 0.5rem;
   font-size: 0.75rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--warn);
   color: var(--warn);
-  background: rgba(255, 170, 0, 0.06);
+  background: rgba(255, 158, 0, 0.08);
+  box-shadow: 0 0 6px rgba(255, 158, 0, 0.15);
 }
 
 .version-badge:empty {
@@ -161,6 +185,71 @@ pre code {
 #install-cmd::before {
   content: "$ ";
   color: var(--accent);
+}
+
+#network {
+  margin: 0 -1.25rem 2rem;
+  height: 460px;
+  overflow: hidden;
+  position: relative;
+  background:
+    linear-gradient(180deg, var(--bg) 0%, transparent 12%, transparent 88%, var(--bg) 100%),
+    linear-gradient(180deg, rgba(0, 240, 255, 0.03) 0%, transparent 50%, rgba(255, 158, 0, 0.02) 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, black 4%, black 96%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 4%, black 96%, transparent 100%);
+}
+
+#network::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 60px;
+  background: linear-gradient(180deg, transparent, var(--bg));
+  pointer-events: none;
+}
+
+.network-marquee {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1.6rem;
+  overflow: hidden;
+  z-index: 2;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.35));
+  border-top: 1px solid rgba(0, 240, 255, 0.08);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  color: rgba(0, 240, 255, 0.55);
+  text-shadow: 0 0 6px rgba(0, 240, 255, 0.25);
+}
+
+.network-marquee-track {
+  display: flex;
+  white-space: nowrap;
+  width: max-content;
+  animation: marquee-scroll 30s linear infinite;
+}
+
+.network-marquee-track span {
+  padding: 0.25rem 3rem 0.25rem 0;
+}
+
+@keyframes marquee-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+#network-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 section {

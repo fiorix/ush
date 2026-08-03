@@ -23,6 +23,20 @@
       All downloads are verified with SHA-256 checksums.</p>
   </section>
 
+  <section id="network" aria-label="Network topology animation">
+    <div class="network-marquee" aria-hidden="true">
+      <div class="network-marquee-track">
+        <span>you connect to 100 jump hosts and push target hosts over stdin</span>
+        <span>each of the 100 jump hosts connecting to 1000 target hosts and executing a command</span>
+        <span>each of the 100k hosts returning their stdout and stderr then tearing down their pipe</span>
+        <span>you connect to 100 jump hosts and push target hosts over stdin</span>
+        <span>each of the 100 jump hosts connecting to 1000 target hosts and executing a command</span>
+        <span>each of the 100k hosts returning their stdout and stderr then tearing down their pipe</span>
+      </div>
+    </div>
+    <canvas id="network-canvas"></canvas>
+  </section>
+
   <section id="usage">
     <h2>Usage</h2>
     <pre><code>echo -ne 'hello\nworld\n' | ush exec -- echo {}
@@ -34,4 +48,8 @@ cat hosts.txt | ush exec -- ssh user@{} -- hostname</code></pre>
     <p>Static binaries and checksums are available on the
       <a href="https://github.com/fiorix/ush/releases/latest">releases page</a>.</p>
   </section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ get_url(path='js/network-animation.js') }}"></script>
 {% endblock %}
