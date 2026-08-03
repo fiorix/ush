@@ -1,4 +1,4 @@
-.PHONY: all build test clean install uninstall site
+.PHONY: all build test test-cli test-e2e clean install uninstall site
 
 all: build
 
@@ -7,6 +7,14 @@ build:
 
 test:
 	cargo test
+	./tests/cli.sh
+
+test-cli:
+	./tests/cli.sh
+
+test-e2e:
+	./tests/e2e/sdme.sh
+	./tests/e2e/sdme-jump.sh
 
 clean:
 	cargo clean

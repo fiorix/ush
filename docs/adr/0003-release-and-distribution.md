@@ -68,7 +68,7 @@ The main adaptation is replacing `sdme` URLs and asset names with `ush` equivale
 
 ### 5. Distro packages stamp the binary to disable self-upgrade
 
-Following `chan`'s `CHAN_PACKAGED` and `sdme`'s `SDME_CHANNEL`, `build.rs` bakes `USH_PACKAGED` into the binary when an environment variable is set:
+Following the packaging-marker convention used by `chan` and `sdme`, `build.rs` bakes `USH_PACKAGED` into the binary when an environment variable is set:
 
 ```rust
 let packaged = std::env::var("USH_PACKAGED").unwrap_or_else(|_| "source".into());

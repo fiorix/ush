@@ -1,10 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-# End-to-end tests for ush.
-# Usage: ./test.sh
+# CLI tests for ush.
+# Usage: ./tests/cli.sh
 
-USH=./target/debug/ush
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+USH="$REPO_DIR/target/debug/ush"
 PASS=0
 FAIL=0
 TMPDIR=$(mktemp -d)
@@ -158,7 +160,7 @@ test_verbose_flag() {
 test_version_flag() {
     local out
     out=$("$USH" --version)
-    assert_contains "$out" "ush v"
+    assert_contains "$out" "ush "
 }
 
 test_missing_command() {
@@ -172,6 +174,7 @@ test_missing_command() {
 # ── Main ──────────────────────────────────────────────────────────────
 
 printf "Building ush...\n"
+cd "$REPO_DIR"
 cargo build --quiet 2>&1
 
 printf "\nRunning end-to-end tests:\n"

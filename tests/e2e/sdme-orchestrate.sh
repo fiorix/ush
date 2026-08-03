@@ -1,7 +1,7 @@
 #!/bin/bash
-# Host-side orchestrator for the nested SDME end-to-end tests.
-# Creates an outer SDME container that runs e2e-sdme-inner.sh.
-# Usage: e2e-sdme-orchestrate.sh <direct|jump> [N]
+# Host-side orchestrator for the nested sdme end-to-end tests.
+# Creates an outer sdme container that runs sdme-inner.sh.
+# Usage: sdme-orchestrate.sh <direct|jump> [N]
 set -euo pipefail
 
 MODE=${1:-direct}
@@ -29,7 +29,7 @@ if ! command -v sdme >/dev/null 2>&1; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Build the ush binary on the host.
 echo "Building ush..."
@@ -82,9 +82,9 @@ done
 # Copy the ush binary and inner test script into the outer container.
 echo "Copying test artifacts into outer container..."
 sudo sdme cp "$REPO_DIR/target/release/ush" "$OUTER_NAME:/usr/local/bin/ush"
-sudo sdme cp "$SCRIPT_DIR/e2e-sdme-inner.sh" "$OUTER_NAME:/usr/local/bin/e2e-sdme-inner.sh"
-sudo sdme exec "$OUTER_NAME" -- chmod +x /usr/local/bin/e2e-sdme-inner.sh
+sudo sdme cp "$SCRIPT_DIR/sdme-inner.sh" "$OUTER_NAME:/usr/local/bin/sdme-inner.sh"
+sudo sdme exec "$OUTER_NAME" -- chmod +x /usr/local/bin/sdme-inner.sh
 
 # Run the test inside the outer container.
 echo "Running inner test (mode=$MODE, N=$N)..."
-sudo sdme exec "$OUTER_NAME" -- /usr/local/bin/e2e-sdme-inner.sh "$MODE" "$N"
+sudo sdme exec "$OUTER_NAME" -- /usr/local/bin/sdme-inner.sh "$MODE" "$N"

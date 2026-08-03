@@ -67,6 +67,17 @@ cat hosts.txt | ush exec -- ssh user@{} -- sleep {} | ush freq duration 1s
 
 See `ush --help` and `ush exec --help` for current flags.
 
+## Testing
+
+```sh
+make test
+./tests/e2e/sdme.sh [N]
+./tests/e2e/sdme-jump.sh [N]
+```
+
+The sdme end-to-end tests require a Linux host with rootful sdme support; see
+`tests/e2e/README.md`.
+
 ## Data flow
 
 ```mermaid

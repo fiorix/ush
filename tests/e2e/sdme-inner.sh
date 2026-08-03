@@ -1,6 +1,6 @@
 #!/bin/bash
-# Runs inside the outer SDME container.
-# Usage: e2e-sdme-inner.sh <direct|jump> [N]
+# Runs inside the outer sdme container.
+# Usage: sdme-inner.sh <direct|jump> [N]
 set -euo pipefail
 
 MODE=${1:-direct}
