@@ -1,6 +1,14 @@
 # ush
 
-ush is a command-line tool and library for parallel execution of shell commands over a stream of targets. It reads targets from stdin, substitutes each target into `{}` placeholders in a command template, runs the commands in parallel, and emits streaming frames to stdout (JSON by default; MessagePack with `--format=msgpack`). Use `--batch` for the legacy one-line-per-target output.
+ush is a command-line tool and library for parallel execution of shell commands over a stream of targets. It reads targets from stdin, substitutes each target into `{}` placeholders in a command template, runs the commands in parallel, and emits streaming frames to stdout (JSON by default; MessagePack with `--format=msgpack`).
+
+## Install
+
+The installer defaults to `~/.local/bin/ush` and can be overridden with `PREFIX=/path/to/dir`.
+
+```sh
+curl -fsSL https://ush.sucks/install.sh | bash
+```
 
 ## Usage
 
